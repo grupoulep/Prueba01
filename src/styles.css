@@ -1,0 +1,399 @@
+/**
+ * Ruta: src/styles.css
+ * Diseño Claro, Limpio y Estructurado para Panel Administrativo y Trabajadores
+ * Navegación lateral izquierda por botones de acción, menos texto y más información financiera.
+ * Restricción: Cero Modales Superpuestos y Cero Burbujas (border-radius <= 6px).
+ */
+
+:root {
+  --bg-page-light: #F8FAFC;
+  --bg-panel-white: #FFFFFF;
+  --bg-row-hover: #F1F5F9;
+  --bg-accordion-light: #F8FAFC;
+  --bg-input-light: #FFFFFF;
+  --border-line: #E2E8F0;
+  --border-strong: #CBD5E1;
+  --text-main: #0F172A;
+  --text-sub: #475569;
+  --text-muted: #64748B;
+  --accent-admin: #6D28D9;
+  --accent-admin-soft: #F3E8FF;
+  --accent-worker: #0D9488;
+  --accent-worker-soft: #CCFBF1;
+  --state-current: #059669;
+  --state-current-soft: #D1FAE5;
+  --state-warning: #D97706;
+  --state-warning-soft: #FEF3C7;
+  --state-overdue: #E11D48;
+  --state-overdue-soft: #FFE4E6;
+  --radius-clean: 6px;
+}
+
+.fintech-flat-workspace {
+  background-color: var(--bg-page-light);
+  color: var(--text-main);
+  font-family: 'Roboto', system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.fintech-flat-workspace *,
+.fintech-flat-workspace *::before,
+.fintech-flat-workspace *::after {
+  box-sizing: border-box;
+  border-radius: var(--radius-clean) !important;
+}
+
+/* Layout principal con barra lateral izquierda de acciones */
+.fintech-shell-layout {
+  display: flex;
+  flex: 1;
+  min-height: calc(100vh - 56px);
+  background-color: var(--bg-page-light);
+  border-radius: 0 !important;
+}
+
+/* Barra lateral izquierda de botones por acción */
+.fintech-left-sidebar {
+  width: 248px;
+  background-color: var(--bg-panel-white);
+  border-right: 1px solid var(--border-line);
+  padding: 0.875rem 0.625rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  flex-shrink: 0;
+  border-radius: 0 !important;
+}
+
+.sidebar-action-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.625rem;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-sub);
+  background-color: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: transform 0.16s ease, background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease;
+}
+
+.sidebar-action-btn:hover {
+  background-color: #F1F5F9;
+  color: var(--text-main);
+  transform: translateX(3px);
+}
+
+.sidebar-action-btn.active-admin {
+  background-color: var(--accent-admin-soft);
+  color: var(--accent-admin);
+  border-color: #C4B5FD;
+  font-weight: 700;
+  transform: translateX(4px);
+}
+
+.sidebar-action-btn.active-worker {
+  background-color: var(--accent-worker-soft);
+  color: var(--accent-worker);
+  border-color: #5EEAD4;
+  font-weight: 700;
+  transform: translateX(4px);
+}
+
+.sidebar-count-badge {
+  font-family: 'Roboto Mono', monospace;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.1rem 0.4rem;
+  background-color: #F1F5F9;
+  color: var(--text-main);
+  border: 1px solid var(--border-line);
+}
+
+/* Animación suave de desplazamiento al cambiar de acción */
+@keyframes panelSlideIn {
+  0% {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.action-panel-slide {
+  animation: panelSlideIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Barra superior clara y limpia */
+.fintech-CommandBar {
+  background-color: var(--bg-panel-white);
+  border-bottom: 1px solid var(--border-line);
+  padding: 0.625rem 1.25rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-radius: 0 !important;
+}
+
+/* Conmutador de Rol / Vista */
+.role-mode-switcher {
+  display: inline-flex;
+  background-color: #F1F5F9;
+  border: 1px solid var(--border-line);
+  padding: 3px;
+  gap: 3px;
+}
+
+.role-mode-btn {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-sub);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  transition: all 0.15s ease;
+}
+
+.role-mode-btn.active-admin {
+  background-color: var(--bg-panel-white);
+  color: var(--accent-admin);
+  border-color: #C4B5FD;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+.role-mode-btn.active-worker {
+  background-color: var(--bg-panel-white);
+  color: var(--accent-worker);
+  border-color: #5EEAD4;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+.role-mode-btn.active-split {
+  background-color: var(--bg-panel-white);
+  color: var(--text-main);
+  border-color: var(--border-strong);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+/* Cinta de KPIs compacta con más datos y menos texto */
+.fintech-kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1px;
+  background-color: var(--border-line);
+  border-bottom: 1px solid var(--border-line);
+  border-radius: 0 !important;
+}
+
+.fintech-kpi-cell {
+  background-color: var(--bg-panel-white);
+  padding: 0.65rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  border-radius: 0 !important;
+}
+
+.fintech-kpi-label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.fintech-kpi-value {
+  font-family: 'Roboto Mono', monospace;
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: var(--text-main);
+}
+
+/* Barra de Edición Masiva (Batch Action Bar) */
+.fintech-batch-bar {
+  background-color: #F5F3FF;
+  border: 1px solid #C4B5FD;
+  padding: 0.5rem 0.875rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.fintech-batch-bar.worker-theme {
+  background-color: #F0FDFA;
+  border-color: #5EEAD4;
+}
+
+/* Matriz de Datos Interactiva Clara */
+.fintech-grid-container {
+  background-color: var(--bg-panel-white);
+  border: 1px solid var(--border-line);
+  overflow-x: auto;
+}
+
+.fintech-data-grid {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 0.76rem;
+}
+
+.fintech-data-grid th {
+  background-color: #F8FAFC;
+  color: var(--text-sub);
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 0.65rem;
+  letter-spacing: 0.03em;
+  padding: 0.55rem 0.65rem;
+  border-bottom: 1px solid var(--border-strong);
+  border-right: 1px solid var(--border-line);
+  white-space: nowrap;
+}
+
+.fintech-data-grid td {
+  padding: 0.5rem 0.65rem;
+  border-bottom: 1px solid var(--border-line);
+  border-right: 1px solid #F1F5F9;
+  vertical-align: middle;
+  color: var(--text-main);
+}
+
+.fintech-data-grid tr.grid-row:hover {
+  background-color: var(--bg-row-hover);
+}
+
+/* Celdas Editables In-Situ (Click-to-Edit) */
+.editable-cell {
+  cursor: pointer;
+  position: relative;
+  transition: background-color 0.14s ease, box-shadow 0.2s ease;
+}
+
+.editable-cell:hover {
+  background-color: #F5F3FF;
+  outline: 1px dashed var(--accent-admin);
+  outline-offset: -1px;
+}
+
+.worker-context .editable-cell:hover {
+  background-color: #F0FDFA;
+  outline: 1px dashed var(--accent-worker);
+  outline-offset: -1px;
+}
+
+.inline-cell-input,
+.inline-cell-select {
+  width: 100%;
+  background-color: var(--bg-input-light);
+  color: var(--text-main);
+  border: 1px solid var(--accent-admin);
+  padding: 0.3rem 0.45rem;
+  font-size: 0.76rem;
+  font-family: 'Roboto Mono', monospace;
+  outline: none;
+}
+
+.worker-context .inline-cell-input,
+.worker-context .inline-cell-select {
+  border-color: var(--accent-worker);
+}
+
+/* Destello de confirmación en celda */
+@keyframes cellEncryptedFlash {
+  0% {
+    box-shadow: inset 0 0 0 2px var(--state-current);
+    background-color: #D1FAE5;
+  }
+  100% {
+    box-shadow: inset 0 0 0 0 transparent;
+    background-color: transparent;
+  }
+}
+
+.cell-saved-flash {
+  animation: cellEncryptedFlash 0.9s ease-out;
+}
+
+/* Etiquetas Semánticas Claras */
+.status-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.45rem;
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+}
+
+.status-tag.emerald {
+  background-color: var(--state-current-soft);
+  color: var(--state-current);
+  border-color: #6EE7B7;
+}
+
+.status-tag.amber {
+  background-color: var(--state-warning-soft);
+  color: var(--state-warning);
+  border-color: #FCD34D;
+}
+
+.status-tag.coral {
+  background-color: var(--state-overdue-soft);
+  color: var(--state-overdue);
+  border-color: #FDA4AF;
+}
+
+.status-tag.cyan {
+  background-color: var(--accent-admin-soft);
+  color: var(--accent-admin);
+  border-color: #C4B5FD;
+}
+
+.status-tag.teal {
+  background-color: var(--accent-worker-soft);
+  color: var(--accent-worker);
+  border-color: #5EEAD4;
+}
+
+/* Filas Expandibles en Acordeón Integrado */
+.inline-accordion-row td {
+  background-color: var(--bg-accordion-light);
+  padding: 0.85rem 1rem;
+  border-bottom: 2px solid var(--border-strong);
+}
+
+@media (max-width: 1024px) {
+  .fintech-shell-layout {
+    flex-direction: column;
+  }
+  .fintech-left-sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--border-line);
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .sidebar-action-btn {
+    width: auto;
+    flex: 1 1 140px;
+  }
+}

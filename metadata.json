@@ -1,0 +1,6 @@
+{
+  "name": "CrediPortal - Portal Financiero Seguro",
+  "description": "Plataforma financiera segura con autenticación 2FA por cédula, consulta de crédito disponible, protección de datos y notificaciones push.",
+  "requestFramePermissions": ["notifications"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
