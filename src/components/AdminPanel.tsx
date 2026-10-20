@@ -1090,13 +1090,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       <div className="fintech-flat-workspace">
         <header className="fintech-CommandBar bg-purple-900 border-b border-purple-800 text-white">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 bg-white text-teal-700 flex items-center justify-center font-bold rounded shadow-xs border border-white/20">
-              <Briefcase className="w-5 h-5 text-teal-700" />
-            </div>
+            <img
+              src={`${import.meta.env.BASE_URL}assets/aistudio/logo-bordered.png`}
+              alt="Logo"
+              className="h-5 sm:h-6 w-auto object-contain select-none shrink-0"
+            />
             <div>
-              <span className="font-extrabold text-sm text-white">
-                Credi<span className="text-teal-300">ULEP</span> • Trabajador
-              </span>
               <div className="text-[11px] text-purple-200">
                 {liveCurrentUser.fullName} ({liveCurrentUser.cedula})
               </div>
@@ -1135,30 +1134,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
          ===================================================================== */}
       <header className="fintech-CommandBar bg-purple-900 border-b border-purple-800 text-white">
         <div className="flex items-center gap-2.5">
-          <div
-            className="w-8 h-8 flex items-center justify-center font-bold rounded shadow-xs"
-            style={{
-              backgroundColor: isAdmin ? '#ffffff' : '#ffffff',
-              color: isAdmin ? '#581c87' : '#0f766e',
-              border: '1px solid rgba(255,255,255,0.2)'
-            }}
-          >
-            {isAdmin ? (
-              <ShieldCheck className="w-5 h-5 text-purple-900" />
-            ) : (
-              <Briefcase className="w-5 h-5 text-teal-700" />
-            )}
-          </div>
+          <img
+            src={`${import.meta.env.BASE_URL}assets/aistudio/logo-bordered.png`}
+            alt="Logo"
+            className="h-5 sm:h-6 w-auto object-contain select-none shrink-0"
+          />
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-extrabold text-sm text-white">
-                Credi<span className={isAdmin ? 'text-purple-300' : 'text-teal-300'}>ULEP</span>
-              </span>
               <span className={`status-tag ${isAdmin ? 'bg-purple-950 text-purple-200 border border-purple-700' : 'bg-teal-950 text-teal-200 border border-teal-700'}`}>
                 {isAdmin ? 'ADMINISTRADOR (CONTROL TOTAL)' : 'TRABAJADOR'}
               </span>
             </div>
-            <div className="text-[11px] text-purple-200">
+            <div className="text-[11px] text-purple-200 mt-0.5">
               {liveCurrentUser.fullName} • {liveCurrentUser.cedula}
               {isWorker && (
                 <span className="ml-2 text-teal-200 font-semibold">
@@ -1317,8 +1304,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   }`}
                 >
                   {/* Barra compacta de filtro y búsqueda */}
-                  <div className="bg-white border border-slate-200 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
+                  <div className="bg-white border border-slate-200 px-3 sm:px-3.5 py-2.5 flex flex-col md:flex-row md:items-center justify-between gap-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className={`status-tag ${isAdmin ? 'cyan' : 'teal'}`}>
                         {activeAction === 'APPROVE_PENDING'
                           ? 'Solicitudes Pendientes'
@@ -1330,26 +1317,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         ({filteredClients.length} registros)
                       </span>
                       {isAdmin && (
-                        <span className="text-[11px] text-purple-700 font-semibold">
+                        <span className="text-[11px] text-purple-700 font-semibold hidden sm:inline">
                           • Clic en cualquier dato para editar
                         </span>
                       )}
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="relative">
+                    <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+                      <div className="relative flex-1 sm:flex-initial min-w-[180px]">
                         <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
                         <input
                           type="text"
                           value={searchQuery}
                           onChange={e => setSearchQuery(e.target.value)}
                           placeholder="Buscar cédula, nombre, teléfono..."
-                          className="bg-slate-50 border border-slate-300 text-slate-900 text-xs pl-8 pr-3 py-1.5 w-52 focus:bg-white focus:border-purple-600 focus:outline-none"
+                          className="bg-slate-50 border border-slate-300 text-slate-900 text-xs pl-8 pr-3 py-1.5 w-full sm:w-56 focus:bg-white focus:border-purple-600 focus:outline-none"
                         />
                       </div>
 
                       {activeAction === 'ALL_PORTFOLIO' && (
-                        <div className="flex items-center bg-slate-100 p-0.5 border border-slate-200">
+                        <div className="flex flex-wrap items-center bg-slate-100 p-0.5 border border-slate-200 w-full sm:w-auto">
                           {(
                             [
                               { id: 'ALL', label: 'Todos' },
@@ -1363,7 +1350,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               key={f.id}
                               type="button"
                               onClick={() => setStatusFilter(f.id)}
-                              className={`px-2.5 py-1 text-[11px] font-bold cursor-pointer ${
+                              className={`flex-1 sm:flex-initial px-2 sm:px-2.5 py-1 text-[11px] font-bold cursor-pointer whitespace-nowrap ${
                                 statusFilter === f.id
                                   ? 'bg-white text-slate-900 shadow-2xs'
                                   : 'text-slate-600 hover:text-slate-900'
@@ -1382,7 +1369,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                             setNewRecordRole('CLIENT');
                             setActiveAction('NEW_RECORD');
                           }}
-                          className="px-3 py-1.5 text-xs font-bold text-white flex items-center gap-1 cursor-pointer"
+                          className="px-3 py-1.5 text-xs font-bold text-white flex items-center justify-center gap-1 cursor-pointer shrink-0"
                           style={{ backgroundColor: accentColor }}
                         >
                           <Plus className="w-3.5 h-3.5" />

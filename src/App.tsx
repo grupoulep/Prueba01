@@ -155,16 +155,12 @@ export default function App() {
     return (
       <div className="min-h-screen bg-[#fcfaff] flex flex-col items-center justify-center p-6 font-sans">
         <div className="bg-white/90 border border-purple-200 rounded-2xl p-8 shadow-xs flex flex-col items-center space-y-4 max-w-xs w-full animate-fadeIn">
-          <div className="relative flex items-center justify-center">
-            <div className="w-16 h-16 rounded-full border-4 border-purple-100 border-t-purple-700 animate-spin" />
-            <div className="absolute w-11 h-11 rounded-xl bg-purple-700 flex items-center justify-center text-white shadow-xs">
-              <ShieldCheck className="w-6 h-6" />
-            </div>
-          </div>
-          <div className="text-center space-y-1">
-            <div className="font-extrabold text-xl text-purple-950 tracking-tight">
-              Credi<span className="text-purple-700">ULEP</span>
-            </div>
+          <img
+            src={`${import.meta.env.BASE_URL}assets/aistudio/52878_14fa00e9.png`}
+            alt="Logo"
+            className="h-6 sm:h-7 w-auto object-contain select-none mx-auto block"
+          />
+          <div className="text-center">
             <p className="text-xs text-purple-700/80 font-medium">
               Cargando plataforma financiera...
             </p>
@@ -191,7 +187,7 @@ export default function App() {
       )}
 
       {/* Main Container con fondo animado de 3 cintas deslizándose tipo serpientes */}
-      <div className={`flex-1 flex flex-col relative overflow-hidden ${isAdminOrWorker ? '' : 'justify-center py-8 sm:py-12 px-4 sm:px-6'}`}>
+      <div className={`flex-1 flex flex-col relative overflow-hidden ${isAdminOrWorker ? '' : currentUser ? 'justify-start' : 'justify-center py-5 sm:py-8 md:py-12 px-3 sm:px-6'}`}>
         {/* Fondo: 3 cintas gruesas redondeadas, nítidas sin desenfoque, deslizándose y pausadas atrás */}
         <div className="absolute inset-0 pointer-events-none overflow-hidden z-0" aria-hidden="true">
           <svg

@@ -73,22 +73,21 @@ export const LoginForm: React.FC<LoginFormProps> = ({
   };
 
   return (
-    <div className="w-full max-w-md mx-auto p-7 sm:p-9 bg-white border border-purple-100 rounded-3xl shadow-[0_10px_35px_rgba(107,33,168,0.08)] font-sans">
+    <div className="w-full max-w-md mx-auto my-auto p-6 sm:p-8 md:p-9 bg-white border border-purple-100 rounded-3xl shadow-[0_10px_35px_rgba(107,33,168,0.08)] font-sans">
       {/* Logo */}
-      <div className="text-center mb-6">
-        <div className="w-13 h-13 rounded-2xl bg-purple-700 flex items-center justify-center text-white mx-auto mb-2.5 shadow-sm border border-purple-800/40">
-          <ShieldCheck className="w-7 h-7" />
-        </div>
-        <div className="font-extrabold text-2xl text-purple-950 tracking-tight">
-          Credi<span className="text-purple-700">ULEP</span>
-        </div>
+      <div className="w-full flex items-center justify-center pt-2 pb-1 mb-5 sm:mb-6">
+        <img
+          src={`${import.meta.env.BASE_URL}assets/aistudio/52878_14fa00e9.png`}
+          alt="Logo"
+          className="h-6 sm:h-7 w-auto object-contain select-none mx-auto block"
+        />
       </div>
 
       {/* Error Message */}
       {errorMessage && (
         <div className="mb-4 p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-start gap-2">
           <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-          <div className="flex-1">
+          <div className="flex-1 min-w-0 break-words">
             <span>{errorMessage}</span>
             {lockCountdown && lockCountdown > 0 && (
               <div className="mt-1 font-bold text-rose-900">
@@ -114,7 +113,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({
               value={cedula}
               onChange={e => setCedula(e.target.value.trim())}
               placeholder="cédula"
-              className="w-full pl-10 pr-4 py-3.5 rounded-xl bg-purple-50/30 border border-purple-200 text-purple-950 text-sm placeholder:text-purple-300 focus:bg-white focus:border-purple-700 focus:ring-2 focus:ring-purple-700/20 focus:outline-none lowercase transition"
+              className="w-full pl-10 pr-4 py-3 sm:py-3.5 rounded-xl bg-purple-50/30 border border-purple-200 text-purple-950 text-sm placeholder:text-purple-300 focus:bg-white focus:border-purple-700 focus:ring-2 focus:ring-purple-700/20 focus:outline-none lowercase transition"
               autoComplete="username"
             />
           </div>
@@ -133,13 +132,13 @@ export const LoginForm: React.FC<LoginFormProps> = ({
               value={password}
               onChange={e => setPassword(e.target.value)}
               placeholder="Clave"
-              className="w-full pl-10 pr-10 py-3.5 rounded-xl bg-purple-50/30 border border-purple-200 text-purple-950 text-sm placeholder:text-purple-300 focus:bg-white focus:border-purple-700 focus:ring-2 focus:ring-purple-700/20 focus:outline-none transition"
+              className="w-full pl-10 pr-10 py-3 sm:py-3.5 rounded-xl bg-purple-50/30 border border-purple-200 text-purple-950 text-sm placeholder:text-purple-300 focus:bg-white focus:border-purple-700 focus:ring-2 focus:ring-purple-700/20 focus:outline-none transition"
               autoComplete="current-password"
             />
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-3.5 top-4 text-purple-400 hover:text-purple-950 cursor-pointer"
+              className="absolute right-3.5 top-1/2 -translate-y-1/2 text-purple-400 hover:text-purple-950 cursor-pointer p-1"
               aria-label={showPassword ? 'Ocultar clave' : 'Ver clave'}
             >
               {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -188,7 +187,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({
       </form>
 
       {/* Usuarios de Prueba (Al Día, En Mora, Sin Aceptar, Admin y Trabajador) */}
-      <div className="mt-6 pt-5 border-t border-purple-100 space-y-2">
+      <div className="mt-5 sm:mt-6 pt-4 sm:pt-5 border-t border-purple-100 space-y-2">
         <div className="text-[11px] font-bold uppercase tracking-wider text-purple-800/60 text-center">
           Cuentas de Prueba Disponibles
         </div>
@@ -201,13 +200,13 @@ export const LoginForm: React.FC<LoginFormProps> = ({
               setPassword('Password123!');
               setErrorMessage(null);
             }}
-            className="w-full px-3.5 py-2.5 rounded-xl bg-purple-50/40 hover:bg-purple-100/60 border border-purple-200/70 text-left flex items-center justify-between cursor-pointer transition"
+            className="w-full px-3 sm:px-3.5 py-2.5 rounded-xl bg-purple-50/40 hover:bg-purple-100/60 border border-purple-200/70 text-left flex items-center justify-between gap-2 cursor-pointer transition"
           >
-            <div>
-              <div className="text-xs font-bold text-purple-950">Cliente: Crédito Al Día</div>
-              <div className="text-[11px] text-purple-700/80">Valentina Ríos • C.C. 1020304050</div>
+            <div className="min-w-0">
+              <div className="text-xs font-bold text-purple-950 truncate">Cliente: Crédito Al Día</div>
+              <div className="text-[11px] text-purple-700/80 truncate">Valentina Ríos • C.C. 1020304050</div>
             </div>
-            <span className="px-2.5 py-0.5 bg-purple-700 text-white text-[10px] font-bold rounded-full">
+            <span className="px-2.5 py-0.5 bg-purple-700 text-white text-[10px] font-bold rounded-full shrink-0 whitespace-nowrap">
               AL DÍA
             </span>
           </button>
@@ -219,13 +218,13 @@ export const LoginForm: React.FC<LoginFormProps> = ({
               setPassword('Password123!');
               setErrorMessage(null);
             }}
-            className="w-full px-3.5 py-2.5 rounded-xl bg-purple-50/40 hover:bg-purple-100/60 border border-purple-200/70 text-left flex items-center justify-between cursor-pointer transition"
+            className="w-full px-3 sm:px-3.5 py-2.5 rounded-xl bg-purple-50/40 hover:bg-purple-100/60 border border-purple-200/70 text-left flex items-center justify-between gap-2 cursor-pointer transition"
           >
-            <div>
-              <div className="text-xs font-bold text-purple-950">Cliente: Crédito En Mora</div>
-              <div className="text-[11px] text-purple-700/80">Andrés Morales • C.C. 1030405060</div>
+            <div className="min-w-0">
+              <div className="text-xs font-bold text-purple-950 truncate">Cliente: Crédito En Mora</div>
+              <div className="text-[11px] text-purple-700/80 truncate">Andrés Morales • C.C. 1030405060</div>
             </div>
-            <span className="px-2.5 py-0.5 bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-bold rounded-full">
+            <span className="px-2.5 py-0.5 bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-bold rounded-full shrink-0 whitespace-nowrap">
               EN MORA (45d)
             </span>
           </button>
@@ -237,13 +236,13 @@ export const LoginForm: React.FC<LoginFormProps> = ({
               setPassword('Password123!');
               setErrorMessage(null);
             }}
-            className="w-full px-3.5 py-2.5 rounded-xl bg-purple-50/40 hover:bg-purple-100/60 border border-purple-200/70 text-left flex items-center justify-between cursor-pointer transition"
+            className="w-full px-3 sm:px-3.5 py-2.5 rounded-xl bg-purple-50/40 hover:bg-purple-100/60 border border-purple-200/70 text-left flex items-center justify-between gap-2 cursor-pointer transition"
           >
-            <div>
-              <div className="text-xs font-bold text-purple-950">Cliente: Crédito Sin Aceptar</div>
-              <div className="text-[11px] text-purple-700/80">Mateo Restrepo • C.C. 9876543210</div>
+            <div className="min-w-0">
+              <div className="text-xs font-bold text-purple-950 truncate">Cliente: Crédito Sin Aceptar</div>
+              <div className="text-[11px] text-purple-700/80 truncate">Mateo Restrepo • C.C. 9876543210</div>
             </div>
-            <span className="px-2.5 py-0.5 bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold rounded-full">
+            <span className="px-2.5 py-0.5 bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold rounded-full shrink-0 whitespace-nowrap">
               SIN ACEPTAR
             </span>
           </button>
@@ -256,10 +255,10 @@ export const LoginForm: React.FC<LoginFormProps> = ({
                 setPassword('ADMINIULEP');
                 setErrorMessage(null);
               }}
-              className="px-3 py-2 rounded-xl bg-purple-50/40 hover:bg-purple-100/60 border border-purple-200/70 text-left cursor-pointer transition"
+              className="px-3 py-2 rounded-xl bg-purple-50/40 hover:bg-purple-100/60 border border-purple-200/70 text-left cursor-pointer transition min-w-0"
             >
-              <div className="text-xs font-bold text-purple-950">Panel Admin</div>
-              <div className="text-[11px] text-purple-700/80">ADMINIULEP</div>
+              <div className="text-xs font-bold text-purple-950 truncate">Panel Admin</div>
+              <div className="text-[11px] text-purple-700/80 truncate">ADMINIULEP</div>
             </button>
 
             <button
@@ -269,10 +268,10 @@ export const LoginForm: React.FC<LoginFormProps> = ({
                 setPassword('Worker123!');
                 setErrorMessage(null);
               }}
-              className="px-3 py-2 rounded-xl bg-purple-50/40 hover:bg-purple-100/60 border border-purple-200/70 text-left cursor-pointer transition"
+              className="px-3 py-2 rounded-xl bg-purple-50/40 hover:bg-purple-100/60 border border-purple-200/70 text-left cursor-pointer transition min-w-0"
             >
-              <div className="text-xs font-bold text-purple-950">Panel Trabajador</div>
-              <div className="text-[11px] text-purple-700/80">OP-2001</div>
+              <div className="text-xs font-bold text-purple-950 truncate">Panel Trabajador</div>
+              <div className="text-[11px] text-purple-700/80 truncate">OP-2001</div>
             </button>
           </div>
         </div>

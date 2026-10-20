@@ -492,15 +492,15 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
   // FLUJO A PANTALLA COMPLETA PASO POR PASO (CON LÍNEA DE PROGRESO SIN NÚMEROS)
   // =========================================================================
   return (
-    <div className="w-full flex-1 flex flex-col justify-between bg-white border-2 border-purple-700 rounded p-6 sm:p-10 shadow-xs animate-fadeIn min-h-[78vh]">
+    <div className="w-full flex-1 flex flex-col justify-between bg-white border-2 border-purple-700 rounded p-4 sm:p-8 md:p-10 shadow-xs animate-fadeIn min-h-[70vh] sm:min-h-[78vh]">
       {/* Cabecera con Cupo Habilitado y Línea de Progreso Continua sin Números */}
-      <div className="space-y-4 border-b border-purple-200 pb-5">
-        <div className="flex items-center justify-end">
-          <div className="bg-purple-50 border border-purple-200 px-4 py-2 rounded text-right">
+      <div className="space-y-4 border-b border-purple-200 pb-4 sm:pb-5">
+        <div className="flex items-center justify-between sm:justify-end">
+          <div className="w-full sm:w-auto bg-purple-50 border border-purple-200 px-3.5 sm:px-4 py-2 rounded flex sm:block items-center justify-between text-right">
             <span className="text-[10px] font-bold uppercase text-purple-700 block">
               Tu Cupo Máximo Habilitado
             </span>
-            <span className="font-mono font-extrabold text-lg text-purple-950">
+            <span className="font-mono font-extrabold text-base sm:text-lg text-purple-950">
               {formatMoney(maxCreditLimit)}
             </span>
           </div>
@@ -524,7 +524,7 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
       </div>
 
       {/* Cuerpo Central: Muestra ÚNICAMENTE la Etapa Actual por Separado */}
-      <div className="flex-1 flex flex-col justify-center py-8 max-w-3xl w-full mx-auto">
+      <div className="flex-1 flex flex-col justify-center py-5 sm:py-8 max-w-3xl w-full mx-auto">
         {stepError && (
           <div className="mb-6 p-3.5 bg-rose-50 border border-rose-300 rounded text-xs font-bold text-rose-700 flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 shrink-0" />
@@ -545,16 +545,16 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
                 ETAPA 1: SELECCIÓN DE MONTO SEGÚN SU CUPO
                =============================================================== */}
             {currentStep === 1 && (
-              <div className="space-y-6 animate-fadeIn">
+              <div className="space-y-5 sm:space-y-6 animate-fadeIn">
                 <div className="space-y-1">
-                  <h2 className="text-2xl sm:text-3xl font-extrabold text-purple-950">
+                  <h2 className="text-xl sm:text-3xl font-extrabold text-purple-950 leading-tight">
                     ¿Cuánto vas a pedir según tu cupo disponible?
                   </h2>
                 </div>
 
-                <div className="p-6 bg-[#fcfaff] border-2 border-purple-200 rounded space-y-5">
+                <div className="p-4 sm:p-6 bg-[#fcfaff] border-2 border-purple-200 rounded space-y-5">
                   <div>
-                    <div className="flex items-baseline justify-between mb-2">
+                    <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-1 mb-2">
                       <label className="text-xs font-extrabold uppercase text-purple-900">
                         Monto a Solicitar (COP)
                       </label>
@@ -653,7 +653,7 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
                   <label className="block text-xs font-extrabold uppercase text-purple-900">
                     Tiempo de las Cuotas Habilitadas (Plazo en Meses)
                   </label>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-3 gap-2.5 sm:gap-3">
                     {[3, 6, 12, 18, 24, 36].map(months => {
                       const cuotaMes = calculateInstallmentForTerm(
                         requestedAmount,
@@ -665,17 +665,17 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
                           key={months}
                           type="button"
                           onClick={() => setRequestedTermMonths(months)}
-                          className={`p-4 rounded border-2 text-left transition cursor-pointer ${
+                          className={`p-3.5 sm:p-4 rounded border-2 text-left transition cursor-pointer ${
                             active
                               ? 'bg-purple-700 text-white border-purple-900 shadow-xs'
                               : 'bg-[#fcfaff] text-purple-950 border-purple-200 hover:border-purple-400'
                           }`}
                         >
-                          <div className="text-sm font-extrabold">
+                          <div className="text-xs sm:text-sm font-extrabold">
                             {months} Cuotas Mensuales
                           </div>
                           <div
-                            className={`font-mono text-base sm:text-lg font-extrabold mt-1 ${
+                            className={`font-mono text-sm sm:text-lg font-extrabold mt-1 ${
                               active ? 'text-white' : 'text-purple-800'
                             }`}
                           >
@@ -698,17 +698,17 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
                 </div>
 
                 {/* Selección de Fechas de Corte / Pago Habilitadas */}
-                <div className="p-5 bg-[#fcfaff] border border-purple-200 rounded space-y-3">
+                <div className="p-4 sm:p-5 bg-[#fcfaff] border border-purple-200 rounded space-y-3">
                   <label className="block text-xs font-extrabold uppercase text-purple-900">
                     Escoge la Fecha Mensual de Pago Habilitada
                   </label>
-                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-2.5">
                     {[5, 10, 15, 20, 30].map(day => (
                       <button
                         key={day}
                         type="button"
                         onClick={() => setSelectedPaymentDay(day)}
-                        className={`py-3 px-3 rounded border font-bold text-xs cursor-pointer transition ${
+                        className={`py-2.5 sm:py-3 px-2.5 sm:px-3 rounded border font-bold text-xs cursor-pointer transition ${
                           selectedPaymentDay === day
                             ? 'bg-purple-950 text-white border-purple-950'
                             : 'bg-white text-purple-900 border-purple-300 hover:bg-purple-50'
@@ -935,7 +935,7 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
                 </div>
 
                 {/* Resumen de lo que se firma */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 bg-purple-50/70 border border-purple-200 p-4 rounded text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 bg-purple-50/70 border border-purple-200 p-4 rounded text-xs">
                   <div>
                     <span className="text-[10px] font-bold uppercase text-purple-600 block">
                       Monto Solicitado
@@ -986,7 +986,7 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 self-start sm:self-auto">
                       <span className="font-mono font-extrabold text-xl tracking-widest bg-white px-3.5 py-1.5 border border-emerald-400 rounded text-emerald-950">
                         {generatedOtp}
                       </span>
@@ -1001,7 +1001,7 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
                   </div>
                 )}
 
-                <div className="p-6 bg-[#fcfaff] border-2 border-purple-300 rounded space-y-4">
+                <div className="p-4 sm:p-6 bg-[#fcfaff] border-2 border-purple-300 rounded space-y-4">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <label className="text-xs font-extrabold uppercase text-purple-950">
                       Código de Firma Electrónica (6 dígitos)
@@ -1011,7 +1011,7 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
                       onClick={() =>
                         generateAndSendOtpToPhone(contactPhone.trim())
                       }
-                      className="text-xs font-bold text-purple-700 hover:text-purple-950 flex items-center gap-1 cursor-pointer"
+                      className="text-xs font-bold text-purple-700 hover:text-purple-950 flex items-center gap-1 cursor-pointer self-start sm:self-auto"
                     >
                       <Send className="w-3.5 h-3.5" />
                       <span>Enviar nuevo código a mi teléfono</span>
@@ -1020,6 +1020,7 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
 
                   <input
                     type="text"
+                    inputMode="numeric"
                     maxLength={6}
                     required
                     value={otpInput}
@@ -1027,7 +1028,7 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
                       setOtpInput(e.target.value.replace(/\D/g, ''))
                     }
                     placeholder="Ingresa los 6 dígitos del código"
-                    className="w-full px-4 py-3.5 rounded bg-white border-2 border-purple-400 font-mono font-extrabold text-2xl text-center text-purple-950 tracking-[0.35em] focus:border-purple-700 focus:outline-none"
+                    className="w-full px-4 py-3.5 rounded bg-white border-2 border-purple-400 font-mono font-extrabold text-xl sm:text-2xl text-center text-purple-950 tracking-[0.2em] sm:tracking-[0.35em] placeholder:text-xs sm:placeholder:text-sm placeholder:tracking-normal placeholder:font-sans placeholder:font-medium focus:border-purple-700 focus:outline-none"
                   />
 
                   <button
@@ -1035,7 +1036,7 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
                     disabled={isSubmitting}
                     className="w-full py-4 px-6 bg-emerald-600 hover:bg-emerald-700 disabled:bg-purple-300 text-white font-extrabold text-sm sm:text-base rounded transition flex items-center justify-center gap-2 cursor-pointer shadow-xs"
                   >
-                    <CheckCircle2 className="w-5 h-5" />
+                    <CheckCircle2 className="w-5 h-5 shrink-0" />
                     <span>
                       {isSubmitting
                         ? 'Firmando y Enviando a Espera de Desembolso...'
@@ -1050,7 +1051,7 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
       </div>
 
       {/* Barra Inferior de Navegación entre Etapas (sin números) */}
-      <div className="pt-6 border-t border-purple-200 flex items-center justify-between gap-4">
+      <div className="pt-5 sm:pt-6 border-t border-purple-200 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-3 sm:gap-4">
         {currentStep > 1 ? (
           <button
             type="button"
@@ -1058,20 +1059,20 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
               setStepError(null);
               changeStepWithLoader((currentStep - 1) as LoanRequestStep);
             }}
-            className="px-5 py-2.5 bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-300 font-bold text-xs sm:text-sm rounded flex items-center gap-2 cursor-pointer"
+            className="w-full sm:w-auto px-5 py-3 sm:py-2.5 bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-300 font-bold text-xs sm:text-sm rounded flex items-center justify-center gap-2 cursor-pointer"
           >
             <ArrowLeft className="w-4 h-4" />
             <span>Anterior</span>
           </button>
         ) : (
-          <div />
+          <div className="hidden sm:block" />
         )}
 
         {currentStep === 1 && (
           <button
             type="button"
             onClick={handleNextStepFrom1}
-            className="px-6 py-3 bg-purple-700 hover:bg-purple-800 text-white font-extrabold text-xs sm:text-sm rounded flex items-center gap-2 cursor-pointer"
+            className="w-full sm:w-auto px-6 py-3 bg-purple-700 hover:bg-purple-800 text-white font-extrabold text-xs sm:text-sm rounded flex items-center justify-center gap-2 cursor-pointer"
           >
             <span>Continuar</span>
             <ArrowRight className="w-4 h-4" />
@@ -1082,7 +1083,7 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
           <button
             type="button"
             onClick={handleNextStepFrom2}
-            className="px-6 py-3 bg-purple-700 hover:bg-purple-800 text-white font-extrabold text-xs sm:text-sm rounded flex items-center gap-2 cursor-pointer"
+            className="w-full sm:w-auto px-6 py-3 bg-purple-700 hover:bg-purple-800 text-white font-extrabold text-xs sm:text-sm rounded flex items-center justify-center gap-2 cursor-pointer"
           >
             <span>Continuar</span>
             <ArrowRight className="w-4 h-4" />
@@ -1093,7 +1094,7 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
           <button
             type="button"
             onClick={handleNextStepFrom3}
-            className="px-6 py-3 bg-purple-700 hover:bg-purple-800 text-white font-extrabold text-xs sm:text-sm rounded flex items-center gap-2 cursor-pointer"
+            className="w-full sm:w-auto px-6 py-3 bg-purple-700 hover:bg-purple-800 text-white font-extrabold text-xs sm:text-sm rounded flex items-center justify-center gap-2 cursor-pointer"
           >
             <span>Continuar</span>
             <ArrowRight className="w-4 h-4" />
@@ -1104,9 +1105,9 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
           <button
             type="button"
             onClick={handleNextStepFrom4}
-            className="px-6 py-3 bg-purple-700 hover:bg-purple-800 text-white font-extrabold text-xs sm:text-sm rounded flex items-center gap-2 cursor-pointer"
+            className="w-full sm:w-auto px-6 py-3 bg-purple-700 hover:bg-purple-800 text-white font-extrabold text-xs sm:text-sm rounded flex items-center justify-center gap-2 cursor-pointer"
           >
-            <Send className="w-4 h-4" />
+            <Send className="w-4 h-4 shrink-0" />
             <span>Enviar Código a mi Teléfono</span>
           </button>
         )}

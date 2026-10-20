@@ -372,19 +372,18 @@ export const RegisterForm: React.FC<RegisterFormProps> = ({
   };
 
   return (
-    <div className="w-full max-w-3xl mx-auto p-6 sm:p-8 bg-white border border-purple-200/90 rounded-2xl shadow-sm animate-fadeIn">
+    <div className="w-full max-w-3xl mx-auto p-4 sm:p-7 md:p-9 bg-white border border-purple-200/90 rounded-2xl shadow-sm animate-fadeIn">
       {/* Logo */}
-      <div className="text-center mb-6">
-        <div className="w-14 h-14 rounded-lg bg-purple-700 flex items-center justify-center text-white shadow-sm border border-purple-800 mx-auto mb-3">
-          <ShieldCheck className="w-8 h-8" />
-        </div>
-        <div className="font-extrabold text-2xl text-purple-950 tracking-tight">
-          Credi<span className="text-purple-700">ULEP</span>
-        </div>
+      <div className="w-full flex items-center justify-center pt-2 pb-1 mb-5 sm:mb-6">
+        <img
+          src={`${import.meta.env.BASE_URL}assets/aistudio/52878_14fa00e9.png`}
+          alt="Logo"
+          className="h-6 sm:h-7 w-auto object-contain select-none mx-auto block"
+        />
       </div>
 
       {/* Indicador de sección abstracto (sin texto ni descripción) */}
-      <div className="flex items-center justify-center gap-2 mb-8">
+      <div className="flex items-center justify-center gap-2 mb-6 sm:mb-8">
         <span className={`h-1 rounded-sm transition-all duration-300 ${section === 1 ? 'w-8 bg-purple-700' : 'w-3 bg-purple-200'}`} />
         <span className={`h-1 rounded-sm transition-all duration-300 ${section === 2 ? 'w-8 bg-purple-700' : 'w-3 bg-purple-200'}`} />
         <span className={`h-1 rounded-sm transition-all duration-300 ${section === 3 ? 'w-8 bg-purple-700' : 'w-3 bg-purple-200'}`} />
@@ -674,7 +673,7 @@ export const RegisterForm: React.FC<RegisterFormProps> = ({
               <label className="block text-xs font-semibold text-purple-900 mb-1.5">
                 Código de 6 Dígitos
               </label>
-              <div className="flex gap-2">
+              <div className="flex flex-col sm:flex-row gap-2.5">
                 <input
                   type="text"
                   inputMode="numeric"
@@ -685,7 +684,7 @@ export const RegisterForm: React.FC<RegisterFormProps> = ({
                     if (otpError) setOtpError(null);
                   }}
                   placeholder="000000"
-                  className="w-36 text-center tracking-widest text-lg font-bold font-mono px-3 py-3 rounded-md bg-white border border-purple-300 text-purple-950 focus:border-purple-700 focus:ring-1 focus:ring-purple-700 focus:outline-none shadow-xs"
+                  className="w-full sm:w-44 text-center tracking-widest text-lg font-bold font-mono px-3 py-3 rounded-md bg-white border border-purple-300 text-purple-950 focus:border-purple-700 focus:ring-1 focus:ring-purple-700 focus:outline-none shadow-xs"
                 />
                 <button
                   type="button"

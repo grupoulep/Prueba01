@@ -39,13 +39,14 @@ export class ErrorBoundary extends Component<Props, State> {
       return (
         <div className="min-h-screen bg-[#fcfaff] flex flex-col items-center justify-center p-6 font-sans">
           <div className="bg-white border border-purple-200 rounded-2xl p-8 shadow-sm flex flex-col items-center space-y-4 max-w-md w-full text-center">
-            <div className="w-14 h-14 rounded-2xl bg-purple-100 text-purple-700 flex items-center justify-center">
-              <ShieldAlert className="w-8 h-8" />
+            <div className="w-full flex items-center justify-center">
+              <img
+                src={`${import.meta.env.BASE_URL}assets/aistudio/52878_14fa00e9.png`}
+                alt="Logo"
+                className="h-6 sm:h-7 w-auto object-contain select-none mx-auto block"
+              />
             </div>
             <div className="space-y-1">
-              <h2 className="text-xl font-bold text-purple-950">
-                Plataforma Financiera Credi<span className="text-purple-700">ULEP</span>
-              </h2>
               <p className="text-sm text-purple-700/80">
                 Se detectó una excepción en la inicialización de la sesión.
               </p>

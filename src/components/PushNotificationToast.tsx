@@ -23,8 +23,8 @@ export const PushNotificationToast: React.FC = () => {
   if (!activeToast) return null;
 
   return (
-    <div className="fixed bottom-5 right-5 z-50 max-w-sm w-full mx-auto sm:mx-0 p-1 pointer-events-auto animate-bounce-subtle">
-      <div className="bg-white border border-purple-200 rounded-md p-4 shadow-lg flex items-start gap-3 text-purple-950">
+    <div className="fixed bottom-3 left-3 right-3 sm:left-auto sm:bottom-5 sm:right-5 z-50 sm:max-w-sm sm:w-full pointer-events-auto animate-fadeIn">
+      <div className="bg-white border border-purple-200 rounded-md p-3.5 sm:p-4 shadow-lg flex items-start gap-3 text-purple-950">
         <div className="p-2 rounded-md bg-purple-50 text-purple-700 border border-purple-200 shrink-0 mt-0.5">
           {activeToast.type === 'credit_assigned' ? (
             <CheckCircle2 className="w-5 h-5 text-purple-700" />

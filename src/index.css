@@ -18,6 +18,14 @@
   ::before,
   ::after {
     font-family: 'Roboto', system-ui, -apple-system, sans-serif;
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    max-width: 100vw;
+    overflow-x: hidden;
   }
 
   body {
@@ -26,6 +34,7 @@
     -moz-osx-font-smoothing: grayscale;
     background-color: #fcfaff;
     color: #1e1b4b;
+    min-height: 100dvh;
   }
 
   code,

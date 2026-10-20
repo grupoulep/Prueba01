@@ -440,10 +440,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 CASO C: CRÉDITO EN PROCESO DE DESEMBOLSO O CRÉDITO ACTIVO CON SALDO
                 1. CÍRCULO DE ESTADO FINANCIERO + NOMBRE DEL CLIENTE ABAJO
                ========================================================================= */}
-            <div className="py-2 flex flex-col items-center justify-center animate-fadeIn space-y-5">
-              <div className="relative flex items-center justify-center shrink-0 mx-auto">
+            <div className="py-2 flex flex-col items-center justify-center animate-fadeIn space-y-4 sm:space-y-5">
+              <div className="relative flex items-center justify-center shrink-0 mx-auto max-w-full">
                 <svg
-                  className="w-68 h-68 sm:w-76 sm:h-76 -rotate-90 transform"
+                  className="w-60 h-60 sm:w-72 sm:h-72 md:w-76 md:h-76 -rotate-90 transform"
                   viewBox="0 0 260 260"
                 >
                   <circle
@@ -467,14 +467,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   />
                 </svg>
 
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-6">
+                <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-5 sm:p-6">
                   <span
-                    className={`px-2.5 py-0.5 rounded text-[10px] font-extrabold uppercase tracking-wider ${circleTheme.badgeClass} mb-2`}
+                    className={`px-2 sm:px-2.5 py-0.5 rounded text-[9px] sm:text-[10px] font-extrabold uppercase tracking-wider ${circleTheme.badgeClass} mb-1.5 sm:mb-2 max-w-[180px] sm:max-w-none truncate`}
                   >
                     {circleTheme.statusLabel}
                   </span>
 
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-purple-900">
+                  <div className="flex items-center gap-1.5 text-[11px] sm:text-xs font-bold text-purple-900">
                     <span>
                       {isDisbursementInProcess
                         ? 'Monto en Desembolso'
@@ -483,7 +483,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     <button
                       type="button"
                       onClick={() => setHideBalance(!hideBalance)}
-                      className="text-purple-600 hover:text-purple-950 transition cursor-pointer"
+                      className="text-purple-600 hover:text-purple-950 transition cursor-pointer p-0.5"
                       title="Mostrar / Ocultar valor"
                     >
                       {hideBalance ? (
@@ -495,7 +495,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   </div>
 
                   <div
-                    className={`text-2xl sm:text-3xl font-extrabold font-mono tracking-tight my-1 ${circleTheme.textAccent}`}
+                    className={`text-xl sm:text-2xl md:text-3xl font-extrabold font-mono tracking-tight my-1 max-w-[195px] sm:max-w-[235px] truncate ${circleTheme.textAccent}`}
                   >
                     {hideBalance
                       ? '••••••••••'
@@ -507,7 +507,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       : formatMoney(saldoPendiente)}
                   </div>
 
-                  <div className="text-xs text-purple-800 font-mono">
+                  <div className="text-[11px] sm:text-xs text-purple-800 font-mono max-w-[190px] sm:max-w-none truncate">
                     {isDisbursementInProcess ? (
                       <>
                         Ref:{' '}
@@ -526,18 +526,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     )}
                   </div>
 
-                  <div className="text-[11px] font-semibold text-purple-700 mt-1">
+                  <div className="text-[10px] sm:text-[11px] font-semibold text-purple-700 mt-1 max-w-[180px] sm:max-w-[220px] leading-tight">
                     {circleTheme.timeDesc}
                   </div>
                 </div>
               </div>
 
               {/* Nombre del cliente abajo del círculo */}
-              <div className="text-center animate-fadeIn pt-1">
+              <div className="text-center animate-fadeIn pt-1 px-2">
                 <div className="text-xs font-semibold text-purple-700 mb-0.5">
                   Bienvenido/a
                 </div>
-                <h1 className="text-2xl sm:text-3xl font-extrabold text-purple-950 tracking-tight">
+                <h1 className="text-xl sm:text-3xl font-extrabold text-purple-950 tracking-tight break-words">
                   {user.fullName}
                 </h1>
               </div>
@@ -559,17 +559,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
               /* =========================================================================
                  SUBCASO C2: CRÉDITO ACTIVO CON SALDO PENDIENTE -> CUADRO DE PAGO EN LÍNEA
                  ========================================================================= */
-              <div className="bg-white border border-purple-200 rounded p-6 sm:p-7 shadow-xs space-y-5 animate-fadeIn">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-4 border-b border-purple-100">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded bg-purple-700 flex items-center justify-center text-white">
+              <div className="bg-white border border-purple-200 rounded p-4 sm:p-7 shadow-xs space-y-5 animate-fadeIn">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-4 border-b border-purple-100">
+                  <div className="flex items-start sm:items-center gap-2.5">
+                    <div className="w-8 h-8 rounded bg-purple-700 flex items-center justify-center text-white shrink-0 mt-0.5 sm:mt-0">
                       <Banknote className="w-4 h-4" />
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <h2 className="text-sm sm:text-base font-extrabold text-purple-950 tracking-tight">
                         Opciones de Pago de tu Crédito
                       </h2>
-                      <p className="text-xs text-purple-700/80">
+                      <p className="text-xs text-purple-700/80 leading-relaxed">
                         {isOverdue
                           ? 'Por presentar estado en mora, únicamente está habilitado el pago total del crédito'
                           : 'Realiza el pago de tu cuota mensual o abona el total para terminar tu crédito y habilitar uno nuevo'}
@@ -577,14 +577,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     </div>
                   </div>
 
-                  <span className="text-xs font-mono font-bold text-purple-900 bg-purple-50 px-3 py-1 rounded border border-purple-200 self-start sm:self-center">
+                  <span className="text-xs font-mono font-bold text-purple-900 bg-purple-50 px-3 py-1 rounded border border-purple-200 self-start sm:self-center shrink-0 whitespace-nowrap">
                     Obligación Vigente
                   </span>
                 </div>
 
                 {isOverdue ? (
-                  <div className="p-5 rounded bg-rose-50/50 border border-rose-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div className="space-y-1.5">
+                  <div className="p-4 sm:p-5 rounded bg-rose-50/50 border border-rose-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="space-y-1.5 min-w-0">
                       <div className="flex items-center gap-2 text-rose-700">
                         <AlertTriangle className="w-4 h-4 shrink-0" />
                         <span className="text-xs font-extrabold uppercase tracking-wider">
@@ -595,11 +595,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         Cancela la totalidad del saldo vencido para normalizar
                         tu estado y habilitar un nuevo crédito.
                       </p>
-                      <div className="pt-1 flex items-baseline gap-2">
+                      <div className="pt-1 flex flex-wrap items-baseline gap-2">
                         <span className="text-xs font-semibold text-purple-700 uppercase">
                           Total a Pagar:
                         </span>
-                        <span className="text-2xl sm:text-3xl font-extrabold text-rose-700 font-mono tracking-tight">
+                        <span className="text-xl sm:text-3xl font-extrabold text-rose-700 font-mono tracking-tight">
                           {hideBalance
                             ? '••••••••••'
                             : formatMoney(saldoPendiente)}
@@ -611,9 +611,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       type="button"
                       disabled={saldoPendiente <= 0}
                       onClick={() => handleOpenPaymentPanel('CREDITO_COMPLETO')}
-                      className="w-full sm:w-72 py-3.5 px-5 bg-rose-600 hover:bg-rose-700 disabled:bg-purple-200 disabled:text-purple-500 text-white font-bold text-xs rounded transition flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed shrink-0"
+                      className="w-full sm:w-auto sm:min-w-[240px] py-3.5 px-5 bg-rose-600 hover:bg-rose-700 disabled:bg-purple-200 disabled:text-purple-500 text-white font-bold text-xs rounded transition flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed shrink-0"
                     >
-                      <CreditCard className="w-4 h-4" />
+                      <CreditCard className="w-4 h-4 shrink-0" />
                       <span>
                         Pagar Crédito Completo (
                         {hideBalance ? '••••••' : formatMoney(saldoPendiente)})
@@ -623,18 +623,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 ) : (
                   <div className="flex flex-col space-y-4">
                     {/* Opción 1: Pagar Cuota */}
-                    <div className="w-full p-5 rounded bg-[#fcfaff] border border-purple-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                      <div className="space-y-1.5">
+                    <div className="w-full p-4 sm:p-5 rounded bg-[#fcfaff] border border-purple-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="space-y-1.5 min-w-0">
                         <span className="text-xs font-extrabold uppercase tracking-wider text-purple-900 flex items-center gap-1.5">
-                          <Receipt className="w-4 h-4 text-purple-700" />
+                          <Receipt className="w-4 h-4 text-purple-700 shrink-0" />
                           <span>Pagar Cuota</span>
                         </span>
 
-                        <div className="pt-1 flex items-baseline gap-2">
+                        <div className="pt-1 flex flex-wrap items-baseline gap-2">
                           <span className="text-[11px] font-semibold text-purple-700 uppercase">
                             Valor de la Cuota:
                           </span>
-                          <span className="text-2xl font-extrabold text-purple-950 font-mono tracking-tight">
+                          <span className="text-xl sm:text-2xl font-extrabold text-purple-950 font-mono tracking-tight">
                             {hideBalance
                               ? '••••••••••'
                               : formatMoney(valorCuota)}
@@ -646,9 +646,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         type="button"
                         disabled={valorCuota <= 0}
                         onClick={() => handleOpenPaymentPanel('CUOTA')}
-                        className="w-full sm:w-64 py-3 px-4 bg-purple-700 hover:bg-purple-800 disabled:bg-purple-200 disabled:text-purple-500 text-white font-bold text-xs rounded transition flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed shrink-0"
+                        className="w-full sm:w-auto sm:min-w-[230px] py-3 px-4 bg-purple-700 hover:bg-purple-800 disabled:bg-purple-200 disabled:text-purple-500 text-white font-bold text-xs rounded transition flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed shrink-0"
                       >
-                        <CreditCard className="w-4 h-4" />
+                        <CreditCard className="w-4 h-4 shrink-0" />
                         <span>
                           Pagar Cuota (
                           {hideBalance ? '••••••' : formatMoney(valorCuota)})
@@ -657,18 +657,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     </div>
 
                     {/* Opción 2: Pagar Cuota Personalizada o Terminar Crédito */}
-                    <div className="w-full p-5 rounded bg-purple-50/40 border border-purple-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                      <div className="space-y-2 flex-1">
+                    <div className="w-full p-4 sm:p-5 rounded bg-purple-50/40 border border-purple-200 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                      <div className="space-y-2.5 flex-1 min-w-0">
                         <span className="text-xs font-extrabold uppercase tracking-wider text-purple-950 flex items-center gap-1.5">
-                          <Wallet className="w-4 h-4 text-purple-700" />
+                          <Wallet className="w-4 h-4 text-purple-700 shrink-0" />
                           <span>
                             Pagar Cuota Personalizada / Terminar Crédito
                           </span>
                         </span>
 
-                        <div className="pt-1 flex flex-wrap items-center gap-3">
-                          <div className="flex items-center gap-2">
-                            <span className="text-[11px] font-semibold text-purple-700 uppercase">
+                        <div className="pt-1 flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2.5">
+                          <div className="flex flex-col xs:flex-row sm:flex-row sm:items-center gap-1.5 sm:gap-2 w-full sm:w-auto">
+                            <span className="text-[11px] font-semibold text-purple-700 uppercase whitespace-nowrap">
                               Monto a Abonar (COP):
                             </span>
                             <input
@@ -691,7 +691,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                     : 0
                                 );
                               }}
-                              className="w-40 px-3 py-1.5 rounded bg-white border border-purple-300 text-purple-950 font-mono font-extrabold text-sm focus:border-purple-700 focus:outline-none disabled:opacity-50"
+                              className="w-full sm:w-44 px-3 py-2 sm:py-1.5 rounded bg-white border border-purple-300 text-purple-950 font-mono font-extrabold text-sm focus:border-purple-700 focus:outline-none disabled:opacity-50"
                               placeholder="Ingrese valor"
                             />
                           </div>
@@ -702,7 +702,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               onClick={() =>
                                 setCustomPaymentAmount(saldoPendiente)
                               }
-                              className="text-[11px] font-bold text-purple-800 hover:text-purple-950 bg-white hover:bg-purple-100 px-2.5 py-1 rounded border border-purple-300 transition cursor-pointer"
+                              className="text-[11px] font-bold text-purple-800 hover:text-purple-950 bg-white hover:bg-purple-100 px-3 py-1.5 sm:py-1 rounded border border-purple-300 transition cursor-pointer self-start sm:self-auto"
                             >
                               Usar Saldo Total (
                               {hideBalance
@@ -722,9 +722,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         onClick={() =>
                           handleOpenPaymentPanel('CUOTA_PERSONALIZADA')
                         }
-                        className="w-full sm:w-64 py-3 px-4 bg-purple-950 hover:bg-purple-900 disabled:bg-purple-200 disabled:text-purple-500 text-white font-bold text-xs rounded transition flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed shrink-0"
+                        className="w-full lg:w-auto lg:min-w-[230px] py-3 px-4 bg-purple-950 hover:bg-purple-900 disabled:bg-purple-200 disabled:text-purple-500 text-white font-bold text-xs rounded transition flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed shrink-0"
                       >
-                        <CheckCircle2 className="w-4 h-4" />
+                        <CheckCircle2 className="w-4 h-4 shrink-0" />
                         <span>
                           Pagar ({hideBalance
                             ? '••••••'
@@ -738,8 +738,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                 {/* Panel Integrado de Confirmación de Pago en Línea (Cero Modales) */}
                 {paymentModalType && (
-                  <div className="mt-4 p-5 bg-purple-50/70 border-2 border-purple-600 rounded space-y-4 animate-fadeIn">
-                    <div className="flex items-center justify-between border-b border-purple-200 pb-2">
+                  <div className="mt-4 p-4 sm:p-5 bg-purple-50/70 border-2 border-purple-600 rounded space-y-4 animate-fadeIn">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-purple-200 pb-2.5">
                       <div>
                         <h3 className="text-sm font-extrabold text-purple-950">
                           {paymentModalType === 'CREDITO_COMPLETO'
@@ -753,7 +753,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           <strong>{user.creditTramiteId}</strong>
                         </p>
                       </div>
-                      <span className="font-mono text-xs font-bold text-purple-900 bg-white px-2.5 py-1 border border-purple-200 rounded">
+                      <span className="font-mono text-xs font-bold text-purple-900 bg-white px-2.5 py-1 border border-purple-200 rounded self-start sm:self-auto">
                         {paymentReference}
                       </span>
                     </div>
@@ -819,18 +819,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           </div>
                         </div>
 
-                        <div className="flex gap-2 justify-end">
+                        <div className="flex flex-col-reverse sm:flex-row gap-2 justify-end">
                           <button
                             type="button"
                             onClick={() => setPaymentModalType(null)}
-                            className="px-4 py-2 bg-white text-purple-800 text-xs font-semibold rounded border border-purple-300 hover:bg-purple-100 cursor-pointer"
+                            className="w-full sm:w-auto px-4 py-2.5 sm:py-2 bg-white text-purple-800 text-xs font-semibold rounded border border-purple-300 hover:bg-purple-100 cursor-pointer"
                           >
                             Cancelar
                           </button>
                           <button
                             type="submit"
                             disabled={isProcessingPayment}
-                            className="px-5 py-2 bg-purple-700 hover:bg-purple-800 text-white text-xs font-bold rounded border border-purple-800 cursor-pointer"
+                            className="w-full sm:w-auto px-5 py-2.5 sm:py-2 bg-purple-700 hover:bg-purple-800 text-white text-xs font-bold rounded border border-purple-800 cursor-pointer"
                           >
                             {isProcessingPayment
                               ? 'Procesando...'
@@ -852,8 +852,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
         {!isPaidOff && previousLoans.length > 0 && (
           <div className="pt-2 space-y-3 animate-fadeIn">
             <div className="flex items-center gap-2.5 pb-2.5 border-b border-purple-300/80">
-              <History className="w-4 h-4 text-purple-700" />
-              <h2 className="text-sm sm:text-base font-extrabold text-purple-950 tracking-tight uppercase">
+              <History className="w-4 h-4 text-purple-700 shrink-0" />
+              <h2 className="text-xs sm:text-base font-extrabold text-purple-950 tracking-tight uppercase">
                 Registro de Créditos Anteriores
               </h2>
               <div className="flex-1 h-px bg-purple-200/70 ml-2" />
@@ -863,7 +863,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               {previousLoans.map(prev => (
                 <div
                   key={prev.id}
-                  className="py-3.5 flex items-center justify-between gap-4"
+                  className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4"
                 >
                   <div className="flex items-center gap-3">
                     <span className="w-4 h-0.5 bg-purple-400 shrink-0" />
@@ -881,12 +881,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                   <div className="hidden sm:block flex-1 max-w-28 border-t border-dashed border-purple-300/80 mx-4" />
 
-                  <div className="text-right">
+                  <div className="pl-7 sm:pl-0 sm:text-right">
                     <span className="text-[10px] text-purple-600 font-semibold uppercase block">
                       Fecha Finalización ({prev.finalStatus})
                     </span>
                     <span className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-mono font-bold text-purple-900">
-                      <Calendar className="w-3.5 h-3.5 text-purple-600" />
+                      <Calendar className="w-3.5 h-3.5 text-purple-600 shrink-0" />
                       <span>{prev.closedDate || prev.startDate}</span>
                     </span>
                   </div>
