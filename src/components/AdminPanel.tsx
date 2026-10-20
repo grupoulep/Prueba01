@@ -1088,16 +1088,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   if (isWorker && liveCurrentUser.isActive === false) {
     return (
       <div className="fintech-flat-workspace">
-        <header className="fintech-CommandBar">
+        <header className="fintech-CommandBar bg-purple-900 border-b border-purple-800 text-white">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 bg-teal-600 text-white flex items-center justify-center font-bold">
-              <Briefcase className="w-5 h-5" />
+            <div className="w-8 h-8 bg-white text-teal-700 flex items-center justify-center font-bold rounded shadow-xs border border-white/20">
+              <Briefcase className="w-5 h-5 text-teal-700" />
             </div>
             <div>
-              <span className="font-extrabold text-sm text-slate-900">
-                Credi<span className="text-teal-600">ULEP</span> • Trabajador
+              <span className="font-extrabold text-sm text-white">
+                Credi<span className="text-teal-300">ULEP</span> • Trabajador
               </span>
-              <div className="text-[11px] text-slate-500">
+              <div className="text-[11px] text-purple-200">
                 {liveCurrentUser.fullName} ({liveCurrentUser.cedula})
               </div>
             </div>
@@ -1105,7 +1105,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           <button
             type="button"
             onClick={onLogout}
-            className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+            className="px-3 py-1.5 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer rounded shadow-xs"
           >
             <LogOut className="w-3.5 h-3.5" />
             <span>Salir</span>
@@ -1133,31 +1133,35 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {/* =====================================================================
           BARRA SUPERIOR CLARA Y COMPACTA (SIN VISTA DOBLE)
          ===================================================================== */}
-      <header className="fintech-CommandBar">
+      <header className="fintech-CommandBar bg-purple-900 border-b border-purple-800 text-white">
         <div className="flex items-center gap-2.5">
           <div
-            className="w-8 h-8 text-white flex items-center justify-center font-bold"
-            style={{ backgroundColor: accentColor }}
+            className="w-8 h-8 flex items-center justify-center font-bold rounded shadow-xs"
+            style={{
+              backgroundColor: isAdmin ? '#ffffff' : '#ffffff',
+              color: isAdmin ? '#581c87' : '#0f766e',
+              border: '1px solid rgba(255,255,255,0.2)'
+            }}
           >
             {isAdmin ? (
-              <ShieldCheck className="w-5 h-5" />
+              <ShieldCheck className="w-5 h-5 text-purple-900" />
             ) : (
-              <Briefcase className="w-5 h-5" />
+              <Briefcase className="w-5 h-5 text-teal-700" />
             )}
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-extrabold text-sm text-slate-900">
-                Credi<span style={{ color: accentColor }}>ULEP</span>
+              <span className="font-extrabold text-sm text-white">
+                Credi<span className={isAdmin ? 'text-purple-300' : 'text-teal-300'}>ULEP</span>
               </span>
-              <span className={`status-tag ${isAdmin ? 'cyan' : 'teal'}`}>
+              <span className={`status-tag ${isAdmin ? 'bg-purple-950 text-purple-200 border border-purple-700' : 'bg-teal-950 text-teal-200 border border-teal-700'}`}>
                 {isAdmin ? 'ADMINISTRADOR (CONTROL TOTAL)' : 'TRABAJADOR'}
               </span>
             </div>
-            <div className="text-[11px] text-slate-500">
+            <div className="text-[11px] text-purple-200">
               {liveCurrentUser.fullName} • {liveCurrentUser.cedula}
               {isWorker && (
-                <span className="ml-2 text-teal-700 font-semibold">
+                <span className="ml-2 text-teal-200 font-semibold">
                   • {(liveCurrentUser.workerPermissions || []).length} accesos habilitados
                 </span>
               )}
@@ -1176,7 +1180,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           <button
             type="button"
             onClick={onLogout}
-            className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+            className="px-3 py-1.5 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer rounded shadow-xs"
           >
             <LogOut className="w-3.5 h-3.5" />
             <span>Salir</span>

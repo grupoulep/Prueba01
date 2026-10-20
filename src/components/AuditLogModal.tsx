@@ -55,28 +55,28 @@ export const AuditLogModal: React.FC<AuditLogModalProps> = ({
         aria-modal="true"
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-purple-200 bg-purple-50/50">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-purple-800 bg-purple-900 text-white">
           <div className="flex items-center space-x-2.5">
-            <div className="p-2 rounded-md bg-purple-100 text-purple-700 border border-purple-200">
-              <History className="w-5 h-5" />
+            <div className="p-2 rounded-md bg-white text-purple-900 border border-purple-200 shadow-xs">
+              <History className="w-5 h-5 text-purple-900" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-purple-950 flex items-center gap-2">
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
                 <span>Historial de Auditoría</span>
                 {isChainValid && (
-                  <span className="px-2 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-200 text-[10px] font-bold">
+                  <span className="px-2 py-0.5 rounded bg-white text-purple-900 border border-purple-200 text-[10px] font-bold">
                     Registro Verificado
                   </span>
                 )}
               </h2>
-              <p className="text-xs text-purple-700/80">
+              <p className="text-xs text-purple-200">
                 Registro secuencial de actividades de la cuenta
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 text-purple-400 hover:text-purple-700 rounded-md transition"
+            className="p-1.5 text-purple-200 hover:text-white rounded-md transition cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>

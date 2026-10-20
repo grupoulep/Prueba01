@@ -50,23 +50,23 @@ El titular podrá ejercer en cualquier momento sus derechos de Acceso, Rectifica
         aria-modal="true"
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-purple-200 bg-purple-50/50">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-purple-800 bg-purple-900 text-white">
           <div className="flex items-center space-x-2.5">
-            <div className="p-2 rounded-md bg-purple-100 text-purple-700 border border-purple-200">
-              <ShieldCheck className="w-5 h-5" />
+            <div className="p-2 rounded-md bg-white text-purple-900 border border-purple-200 shadow-xs">
+              <ShieldCheck className="w-5 h-5 text-purple-900" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-purple-950">
+              <h2 className="text-base font-bold text-white">
                 Políticas de Privacidad y Seguridad
               </h2>
-              <p className="text-xs text-purple-700/80">
+              <p className="text-xs text-purple-200">
                 Protección Integral de Datos Personales
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 text-purple-400 hover:text-purple-700 rounded-md transition"
+            className="p-1.5 text-purple-200 hover:text-white rounded-md transition cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
