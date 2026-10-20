@@ -29,7 +29,7 @@ jobs:
           node-version: 20
 
       - name: Instalar dependencias del proyecto
-        run: npm install
+        run: npm install --legacy-peer-deps --no-audit
 
       - name: Compilar aplicación para GitHub Pages (Rutas Relativas)
         run: |

@@ -94,3 +94,13 @@ Una vez abras el enlace de tu página en GitHub Pages, puedes probar cualquiera 
 
 - **Bóveda Local Cifrada (`AES-256-GCM`):** Toda la información de clientes, solicitudes de préstamos, firmas electrónicas OTP y cadena de bloques de auditoría (`security-crypto.js`) funciona **100% en el navegador** mediante la API nativa `window.crypto.subtle` (Web Crypto API).
 - **Resiliencia Offline / Sin Cuotas:** Si la página se aloja de forma estática en GitHub Pages, el motor de almacenamiento opera de forma autónoma con `localStorage` cifrado extremo a extremo sin depender de servidores externos.
+
+---
+
+## RESOLUCIÓN DEL ERROR `npm error Cannot read properties of null (reading 'edgesOut')` EN GITHUB ACTIONS
+
+Este error ocurre en GitHub Actions cuando el árbol de dependencias de `npm` (módulo Arborizer) intenta resolver dependencias en entornos sin archivo de bloqueo homogéneo. Ha sido resuelto de raíz con 3 ajustes incorporados en el proyecto:
+1. **Archivo `.npmrc`:** Configurado con `legacy-peer-deps=true` para garantizar compatibilidad automática en cualquier servidor o runner.
+2. **Workflow Actualizado (`.github/workflows/deploy-github-pages.yml`):** Utiliza `npm install --legacy-peer-deps --no-audit`.
+3. **`package-lock.json` Oficial Generado:** Bloquea las versiones exactas sin conflictos de pares entre Vite y los plugins.
+
