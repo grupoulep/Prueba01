@@ -5,13 +5,20 @@ Este documento independiente contiene la guía completa y detallada para **visua
 
 ---
 
-## ¿POR QUÉ UN PROYECTO REACT/VITE NECESITA ESTO EN GITHUB?
+## ¿POR QUÉ NO SE VEÍA NADA (PANTALLA EN BLANCO) Y CÓMO ESTÁ SOLUCIONADO?
 
-Los navegadores web no pueden ejecutar archivos `.tsx` (TypeScript + React) directamente desde el código fuente `/src`. Para que GitHub muestre la página funcionando en vivo, este repositorio ya ha sido preconfigurado con **tres mecanismos listos para usar**:
+Al publicar un proyecto moderno de React + Vite en GitHub, si se abre el enlace y **no se ve nada o aparece una pantalla blanca**, se debe a 2 razones técnicas muy comunes:
 
-1. **Carpeta `/docs` Precompilada (Visualización Inmediata sin Compilar):** Ya incluye los archivos HTML, CSS y JavaScript listos para producción con rutas relativas (`./`).
-2. **Flujo Automático de GitHub Actions (`.github/workflows/deploy-github-pages.yml`):** Compila y actualiza la página automáticamente cada vez que haces un cambio en GitHub.
-3. **Configuración `base: './'` en `vite.config.ts`:** Garantiza que todos los recursos carguen correctamente bajo subdirectorios del tipo `https://tu-usuario.github.io/nombre-del-repositorio/`.
+### 1. El selector de carpeta de GitHub Pages estaba en `/ (root)` en vez de `/docs`
+* **Lo que ocurría:** Por defecto, GitHub Pages busca un archivo `index.html` en la raíz del repositorio. El `index.html` fuente de React llama a `/src/main.tsx` (TypeScript con JSX). Los navegadores web **no saben interpretar TypeScript ni JSX directamente** sin compilarlo a JavaScript estándar, y además la ruta `/src/main.tsx` buscaba en `https://tu-usuario.github.io/src/main.tsx` en lugar de la subcarpeta de tu proyecto (`/tu-repositorio/`). Al no encontrarlo o no poder procesarlo, el navegador se detenía y dejaba la pantalla blanca.
+* **Cómo lo solucionamos de raíz:**
+  - **Script de Redirección Automática en `index.html`:** Si alguien deja configurada la carpeta en `/ (root)` en GitHub, el archivo detecta la plataforma y redirige de inmediato a la carpeta compilada `/docs/`.
+  - **Carpeta `/docs` Precompilada y Actualizada:** Contiene la versión de producción empaquetada (HTML, CSS y JS estándar) con rutas relativas (`./assets/...`).
+  - **Componente `ErrorBoundary` y Salvaguarda de Carga:** Protege la aplicación para que la pantalla de inicio nunca se quede colgada en blanco bajo ninguna circunstancia.
+
+### 2. El fallo de dependencias en GitHub Actions (`edgesOut`)
+* Si intentaste publicar usando GitHub Actions, el flujo se detenía con el error `npm error Cannot read properties of null (reading 'edgesOut')` antes de poder subir la página.
+* Ya fue resuelto integrando `.npmrc` (`legacy-peer-deps=true`), actualizando el workflow a Node 22 y generando el `package-lock.json` verificado.
 
 ---
 

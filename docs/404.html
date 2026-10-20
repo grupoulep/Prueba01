@@ -12,8 +12,24 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Roboto+Condensed:ital,wght@0,100..900;1,100..900&family=Roboto+Mono:ital,wght@0,100..700;1,100..700&family=Roboto+Serif:ital,opsz,wght@0,8..144,100..900;1,8..144,100..900&family=Roboto:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet" />
-    <script type="module" crossorigin src="./assets/index-CAsQNbQX.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-CDxPuUXJ.css">
+    <script>
+      // Detección automática inteligente para GitHub Pages:
+      // Si la página se publicó desde la raíz (/) y el bundle no compilado no pudo ejecutarse,
+      // redirige automáticamente a la carpeta compilada /docs/ sin pantalla en blanco.
+      window.addEventListener('DOMContentLoaded', function() {
+        setTimeout(function() {
+          var root = document.getElementById('root');
+          var isGitHub = window.location.hostname.includes('github.io');
+          if (isGitHub && (!root || root.children.length === 0) && !window.location.pathname.includes('/docs/')) {
+            var path = window.location.pathname;
+            var repo = path.endsWith('/') ? path : path + '/';
+            window.location.replace(repo + 'docs/' + window.location.search + window.location.hash);
+          }
+        }, 300);
+      });
+    </script>
+    <script type="module" crossorigin src="./assets/index-BkpPp-lx.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BlFFZh7v.css">
   </head>
   <body>
     <div id="root"></div>

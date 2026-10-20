@@ -31,13 +31,24 @@ export default function App() {
   const [isRecoveryModalOpen, setIsRecoveryModalOpen] = useState<boolean>(false);
 
   useEffect(() => {
+    let isMounted = true;
     const init = async () => {
-      await StorageService.initializeDefaultData();
-      setTimeout(() => {
-        setIsInitialLoading(false);
-      }, 480);
+      try {
+        await StorageService.initializeDefaultData();
+      } catch (err) {
+        console.warn('Advertencia en inicialización de bóveda:', err);
+      } finally {
+        if (isMounted) {
+          setTimeout(() => {
+            setIsInitialLoading(false);
+          }, 350);
+        }
+      }
     };
     init();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const triggerBlockTransition = React.useCallback((callback: () => void) => {
