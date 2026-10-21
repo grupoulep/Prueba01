@@ -99,11 +99,9 @@
 @keyframes blockFadeSlideIn {
   0% {
     opacity: 0;
-    transform: translateY(10px) scale(0.992);
   }
   100% {
     opacity: 1;
-    transform: translateY(0) scale(1);
   }
 }
 
@@ -117,7 +115,7 @@
 }
 
 .animate-fadeIn {
-  animation: blockFadeSlideIn 0.38s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: blockFadeSlideIn 0.28s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .animate-shimmerBar {

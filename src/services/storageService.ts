@@ -11,7 +11,8 @@ import {
   WorkerPermission,
   LegalSignatureRecord,
   LoanGeneralSettings,
-  PreviousLoanRecord
+  PreviousLoanRecord,
+  ClientPaymentRecord
 } from '../types';
 import {
   hashPassword,
@@ -853,27 +854,53 @@ export class StorageService {
     userId: string,
     amount: number,
     paymentType: 'CUOTA' | 'CUOTA_PERSONALIZADA' | 'CUOTA_COMPLETA' | 'TOTALIDAD',
-    paymentMethod: string
-  ): Promise<{ success: boolean; user?: User; message: string }> {
+    paymentMethod: string,
+    paymentDetails?: {
+      paymentNumber: string;
+      transactionId: string;
+      authorizationCode: string;
+      payerFullName: string;
+      payerCedula: string;
+      payerEmail: string;
+    }
+  ): Promise<{ success: boolean; user?: User; paymentNumber: string; message: string }> {
     const { users } = await this.getUsers();
     const index = users.findIndex(u => u.id === userId);
     if (index === -1) {
-      return { success: false, message: 'Usuario no encontrado.' };
+      return { success: false, paymentNumber: '', message: 'Usuario no encontrado.' };
     }
 
     const user = users[index];
     if (amount <= 0 || user.availableBalance <= 0) {
-      return { success: false, message: 'No hay saldo pendiente por pagar.' };
+      return { success: false, paymentNumber: '', message: 'No hay saldo pendiente por pagar.' };
     }
 
     const appliedAmount = Math.min(user.availableBalance, amount);
     const newBalance = Math.max(0, user.availableBalance - appliedAmount);
     const labelTipo =
       paymentType === 'CUOTA_PERSONALIZADA'
-        ? 'Pago de Cuota Personalizada'
+        ? 'Pago Parcial / Personalizado'
         : paymentType === 'TOTALIDAD'
         ? 'Pago de Totalidad del Préstamo'
         : 'Pago de Cuota';
+
+    const generatedPaymentNumber =
+      paymentDetails?.paymentNumber ||
+      `PAG-EFI-${Math.floor(100000 + Math.random() * 900000)}`;
+    const nowIso = new Date().toISOString();
+
+    const newPaymentRecord: ClientPaymentRecord = {
+      paymentNumber: generatedPaymentNumber,
+      transactionId: paymentDetails?.transactionId || generatedPaymentNumber,
+      authorizationCode: paymentDetails?.authorizationCode || 'AUTH-OK',
+      amount: appliedAmount,
+      paymentMethod,
+      payerFullName: paymentDetails?.payerFullName || user.fullName,
+      payerCedula: paymentDetails?.payerCedula || user.cedula,
+      payerEmail: paymentDetails?.payerEmail || user.email,
+      status: 'PAGO_PROCESADO',
+      paidAt: nowIso
+    };
 
     const loanSettings = this.getLoanSettings();
     const updatedPreviousLoans: PreviousLoanRecord[] = [...(user.previousLoans || [])];
@@ -900,14 +927,20 @@ export class StorageService {
       paymentStatus: newBalance === 0 ? 'PAZ_Y_SALVO' : 'AL_DIA',
       daysOverdue: 0,
       previousLoans: updatedPreviousLoans,
+      lastPaymentNumber: generatedPaymentNumber,
+      lastPaymentStatus: 'PAGO_PROCESADO',
+      lastPaymentAmount: appliedAmount,
+      lastPaymentMethod: paymentMethod,
+      lastPaymentDate: nowIso,
+      paymentRecords: [newPaymentRecord, ...(user.paymentRecords || [])].slice(0, 30),
       integrityChecksum: ''
     };
 
     const saved = await this.updateUserDirectly(updatedUser);
 
     notificationService.sendPush({
-      title: `✅ ${labelTipo} Exitoso`,
-      message: `Se registró tu pago por $ ${appliedAmount.toLocaleString('es-CO')} COP vía ${paymentMethod}. Saldo pendiente del préstamo: $ ${newBalance.toLocaleString('es-CO')} COP.`,
+      title: `✅ PAGO PROCESADO (${generatedPaymentNumber})`,
+      message: `Se registró tu pago N° ${generatedPaymentNumber} por $ ${appliedAmount.toLocaleString('es-CO')} COP vía ${paymentMethod}. Saldo pendiente: $ ${newBalance.toLocaleString('es-CO')} COP.`,
       type: 'credit_assigned'
     });
 
@@ -915,13 +948,81 @@ export class StorageService {
       paymentType === 'CUOTA_PERSONALIZADA' ? 'LOAN_CUSTOM_PAYMENT' : 'LOAN_INSTALLMENT_PAYMENT',
       user.id,
       user.cedula,
-      `${labelTipo} realizado vía ${paymentMethod} por valor de $ ${appliedAmount.toLocaleString('es-CO')} COP. Saldo restante: $ ${newBalance.toLocaleString('es-CO')} COP.`
+      `PAGO PROCESADO • N° Pago: ${generatedPaymentNumber} • ${labelTipo} vía ${paymentMethod} por valor de $ ${appliedAmount.toLocaleString('es-CO')} COP. Pagador identificado: ${newPaymentRecord.payerFullName} (CC ${newPaymentRecord.payerCedula} | ${newPaymentRecord.payerEmail}). Saldo restante: $ ${newBalance.toLocaleString('es-CO')} COP.`
     );
 
     return {
       success: true,
       user: saved,
-      message: `${labelTipo} procesado exitosamente.`
+      paymentNumber: generatedPaymentNumber,
+      message: `PAGO PROCESADO • N° de Pago: ${generatedPaymentNumber}`
+    };
+  }
+
+  /**
+   * Registra un intento de pago cancelado o no completado en la pasarela Efipay
+   */
+  static async recordCancelledPayment(
+    userId: string,
+    amount: number,
+    paymentMethod: string,
+    payerInfo?: {
+      paymentNumber?: string;
+      payerFullName?: string;
+      payerCedula?: string;
+      payerEmail?: string;
+    }
+  ): Promise<{ success: boolean; user?: User; paymentNumber: string; message: string }> {
+    const { users } = await this.getUsers();
+    const index = users.findIndex(u => u.id === userId);
+    if (index === -1) {
+      return { success: false, paymentNumber: '', message: 'Usuario no encontrado.' };
+    }
+
+    const user = users[index];
+    const cancelledNumber =
+      payerInfo?.paymentNumber ||
+      `CANC-EFI-${Math.floor(100000 + Math.random() * 900000)}`;
+    const nowIso = new Date().toISOString();
+
+    const cancelledRecord: ClientPaymentRecord = {
+      paymentNumber: cancelledNumber,
+      transactionId: cancelledNumber,
+      authorizationCode: 'CANCELADO',
+      amount: Math.max(0, amount),
+      paymentMethod,
+      payerFullName: payerInfo?.payerFullName || user.fullName,
+      payerCedula: payerInfo?.payerCedula || user.cedula,
+      payerEmail: payerInfo?.payerEmail || user.email,
+      status: 'PAGO_CANCELADO',
+      paidAt: nowIso
+    };
+
+    const updatedUser: User = {
+      ...user,
+      lastPaymentNumber: cancelledNumber,
+      lastPaymentStatus: 'PAGO_CANCELADO',
+      lastPaymentAmount: Math.max(0, amount),
+      lastPaymentMethod: paymentMethod,
+      lastPaymentDate: nowIso,
+      paymentRecords: [cancelledRecord, ...(user.paymentRecords || [])].slice(0, 30),
+      integrityChecksum: ''
+    };
+
+    const saved = await this.updateUserDirectly(updatedUser);
+
+    await this.addAuditEntry(
+      'LOAN_PAYMENT_CANCELLED',
+      user.id,
+      user.cedula,
+      `PAGO CANCELADO • Ref: ${cancelledNumber} • Intento de pago por $ ${Math.max(0, amount).toLocaleString('es-CO')} COP vía ${paymentMethod} fue cancelado o no procesado.`
+    );
+
+    return {
+      success: true,
+      user: saved,
+      paymentNumber: cancelledNumber,
+      message: 'PAGO CANCELADO'
     };
   }
 

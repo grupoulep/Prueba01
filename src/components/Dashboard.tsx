@@ -12,10 +12,31 @@ import {
   Sparkles,
   History,
   Calendar,
-  AlertTriangle
+  AlertTriangle,
+  ShieldCheck,
+  Lock,
+  QrCode,
+  Smartphone,
+  Building2,
+  Download,
+  XCircle,
+  ArrowRight,
+  UserCheck,
+  Mail,
+  ChevronDown,
+  ChevronUp,
+  X
 } from 'lucide-react';
+import { jsPDF } from 'jspdf';
 import { StorageService } from '../services/storageService';
 import { verifyUserIntegrity } from '../services/cryptoService';
+import {
+  EfipayService,
+  EfipayChannel,
+  EfipayEncryptedReceipt,
+  EFIPAY_CHANNELS,
+  COLOMBIAN_PSE_BANKS
+} from '../services/efipayService';
 import { fintechPanelsEngine } from '../fintech-panels.js';
 import { LoanRequestFlow } from './LoanRequestFlow';
 
@@ -37,19 +58,61 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [hideBalance, setHideBalance] = useState<boolean>(false);
   const [integrityValid, setIntegrityValid] = useState<boolean>(true);
 
-  // Estado para pago en línea (In-Situ, sin ventanas modales)
+  // Estado para pago en línea (Ventana a pantalla completa "¿Cuánto deseas pagar?" y flujo de pago)
+  const [isPaySelectionWindowOpen, setIsPaySelectionWindowOpen] =
+    useState<boolean>(false);
+  const [isCustomAmountExpanded, setIsCustomAmountExpanded] =
+    useState<boolean>(false);
   const [paymentModalType, setPaymentModalType] = useState<
     'CUOTA' | 'CUOTA_PERSONALIZADA' | 'CREDITO_COMPLETO' | null
   >(null);
-  const [paymentMethod, setPaymentMethod] = useState<string>(
-    'PSE - Débito Bancario'
+  const [isPartialPaymentExpanded, setIsPartialPaymentExpanded] =
+    useState<boolean>(false);
+  const [payerFullName, setPayerFullName] = useState<string>(
+    initialUser.fullName || ''
   );
+  const [payerCedula, setPayerCedula] = useState<string>(
+    initialUser.cedula || ''
+  );
+  const [payerEmail, setPayerEmail] = useState<string>(
+    initialUser.email || ''
+  );
+  const [paymentOutcomeStatus, setPaymentOutcomeStatus] = useState<
+    'PAGO_PROCESADO' | 'PAGO_CANCELADO' | null
+  >(null);
+  const [lastCompletedReceipt, setLastCompletedReceipt] =
+    useState<EfipayEncryptedReceipt | null>(null);
+  const [cancelledPaymentRef, setCancelledPaymentRef] = useState<string>('');
+  const [efipayChannel, setEfipayChannel] = useState<EfipayChannel>('EFIPAY_PSE');
+  const [pseBank, setPseBank] = useState<string>('Bancolombia');
+  const [psePersonType, setPsePersonType] = useState<'NATURAL' | 'JURIDICA'>('NATURAL');
+  const [cardNumber, setCardNumber] = useState<string>('');
+  const [cardExpiry, setCardExpiry] = useState<string>('');
+  const [cardCvv, setCardCvv] = useState<string>('');
+  const [cardInstallments, setCardInstallments] = useState<number>(1);
+  const [walletPhone, setWalletPhone] = useState<string>(initialUser.phone || '');
   const [paymentReference, setPaymentReference] = useState<string>('');
   const [isProcessingPayment, setIsProcessingPayment] =
     useState<boolean>(false);
   const [paymentSuccessMessage, setPaymentSuccessMessage] = useState<
     string | null
   >(null);
+  const [efipayReceipt, setEfipayReceipt] =
+    useState<EfipayEncryptedReceipt | null>(null);
+  const [efipayError, setEfipayError] = useState<string | null>(null);
+  const [isTestingEfipay, setIsTestingEfipay] = useState<boolean>(false);
+  const [efipayTestResult, setEfipayTestResult] = useState<{
+    connected: boolean;
+    latencyMs: number;
+    transactionId: string;
+    authorizationCode: string;
+    instrumentToken: string;
+    antiReplayVerified: boolean;
+    zeroApiLeakageVerified: boolean;
+    encryptionStandard: string;
+    receiptSignature: string;
+    testedAt: string;
+  } | null>(null);
 
   // Monto original otorgado al cliente
   const [loanGrantedAmount] = useState<number>(() => {
@@ -194,75 +257,132 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const isPaidOff =
     isLoanAssigned && !isDisbursementInProcess && saldoPendiente === 0;
 
-  // Esquema cromático dinámico del Círculo según Estado
-  const getCircleTheme = () => {
-    if (isDisbursementInProcess) {
-      return {
-        strokeColor: '#0284c7',
-        trackColor: '#e0f2fe',
-        badgeClass: 'bg-sky-700 text-white',
-        textAccent: 'text-sky-950',
-        statusLabel: 'EN PROCESO DE DESEMBOLSO',
-        timeDesc: `Firma OTP validada • Esperando activación bancaria o del personal`
-      };
-    }
-    if (isPaidOff) {
-      return {
-        strokeColor: '#059669',
-        trackColor: '#d1fae5',
-        badgeClass: 'bg-emerald-700 text-white',
-        textAccent: 'text-emerald-950',
-        statusLabel: 'CRÉDITO FINALIZADO • PAZ Y SALVO',
-        timeDesc: 'Obligación pagada al 100% • Cupo disponible para nuevo crédito'
-      };
-    }
+  // Valor exacto de la cuota con decimales para mostrar estilo "$254,826.95"
+  const cuotaExactaMensual =
+    user.customInstallmentAmount && user.customInstallmentAmount > 0
+      ? user.customInstallmentAmount
+      : montoPrestado > 0
+      ? Number((montoPrestado / plazoMeses).toFixed(2))
+      : 0;
+
+  const valorCuotaCard = isDisbursementInProcess
+    ? user.disbursementRequest?.estimatedMonthlyInstallment || cuotaExactaMensual
+    : saldoPendiente > 0
+    ? Math.min(saldoPendiente, cuotaExactaMensual)
+    : 0;
+
+  const formatInstallmentValue = (val: number) => {
+    return (
+      '$' +
+      new Intl.NumberFormat('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      }).format(val)
+    );
+  };
+
+  const formatDotCurrency = (val: number) => {
+    return (
+      '$' +
+      new Intl.NumberFormat('es-CO', {
+        maximumFractionDigits: 0
+      }).format(Math.round(val))
+    );
+  };
+
+  // Instancia del Estado de Pago (verde pastel, rojo pastel o amarillo pastel)
+  const getPaymentStatusInstance = () => {
     if (isOverdue) {
       return {
-        strokeColor: '#dc2626',
-        trackColor: '#fee2e2',
-        badgeClass: 'bg-rose-600 text-white',
-        textAccent: 'text-rose-950',
-        statusLabel: `EN MORA (${daysOverdue || 30} DÍAS)`,
-        timeDesc: `Tiempo vencido • Deuda del ${debtRatio}% activa`
+        label: 'En mora',
+        badgeClass: 'bg-red-100 text-red-800 border border-red-200'
       };
     }
-    if (isNearDue && user.paymentStatus === 'PROXIMO_VENCIMIENTO') {
+    if (
+      user.paymentStatus === 'PROXIMO_VENCIMIENTO' ||
+      isDisbursementInProcess
+    ) {
       return {
-        strokeColor: '#d97706',
-        trackColor: '#fef3c7',
-        badgeClass: 'bg-amber-600 text-white',
-        textAccent: 'text-amber-950',
-        statusLabel: 'PRÓXIMO VENCIMIENTO',
-        timeDesc: `Corte cercano • Deuda actual ${debtRatio}%`
+        label: 'Pendiente',
+        badgeClass: 'bg-amber-100 text-amber-800 border border-amber-200'
       };
     }
     return {
-      strokeColor: '#059669',
-      trackColor: '#d1fae5',
-      badgeClass: 'bg-emerald-700 text-white',
-      textAccent: 'text-emerald-950',
-      statusLabel: 'CRÉDITO AL DÍA',
-      timeDesc: `Pagos puntuales • Deuda vigente ${debtRatio}%`
+      label: 'Estás al día',
+      badgeClass: 'bg-emerald-100 text-emerald-800 border border-emerald-200'
     };
   };
 
-  const circleTheme = getCircleTheme();
-  const radius = 116;
-  const circumference = 2 * Math.PI * radius;
-  const progressPercent = isDisbursementInProcess
-    ? 65
-    : isPaidOff
-    ? 100
-    : Math.max(8, debtRatio);
-  const strokeDashoffset =
-    circumference - (progressPercent / 100) * circumference;
+  const paymentStatusInstance = getPaymentStatusInstance();
+
+  // Fecha y hora de finalización del pago de la cuota
+  const getInstallmentDeadlineText = (): string => {
+    const raw = (user.nextPaymentDate || '').trim();
+    let dueDate: Date;
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      const [y, m, d] = raw.split('-').map(Number);
+      dueDate = new Date(y, m - 1, d, 23, 59, 0);
+    } else if (raw && !Number.isNaN(Date.parse(raw))) {
+      const parsed = new Date(raw);
+      if (!raw.includes(':')) {
+        parsed.setHours(23, 59, 0, 0);
+      }
+      dueDate = parsed;
+    } else {
+      const dayMatch = raw.match(/\d{1,2}/);
+      const targetDay = dayMatch
+        ? Math.min(28, Math.max(1, Number(dayMatch[0])))
+        : 16;
+      const now = new Date();
+      dueDate = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        targetDay,
+        23,
+        59,
+        0
+      );
+      if (dueDate.getTime() <= now.getTime() && !isOverdue) {
+        dueDate = new Date(
+          now.getFullYear(),
+          now.getMonth() + 1,
+          targetDay,
+          23,
+          59,
+          0
+        );
+      }
+    }
+
+    const formattedDate = dueDate.toLocaleDateString('es-CO', {
+      day: '2-digit',
+      month: 'long',
+      year: 'numeric'
+    });
+    const formattedTime = dueDate.toLocaleTimeString('es-CO', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+
+    return `${formattedDate}, ${formattedTime}`;
+  };
+
+  const installmentDeadlineText = getInstallmentDeadlineText();
 
   const handleOpenPaymentPanel = (
     type: 'CUOTA' | 'CUOTA_PERSONALIZADA' | 'CREDITO_COMPLETO'
   ) => {
     setPaymentSuccessMessage(null);
+    setEfipayReceipt(null);
+    setEfipayError(null);
+    setPaymentOutcomeStatus(null);
+    setPayerFullName(user.fullName || '');
+    setPayerCedula(user.cedula || '');
+    setPayerEmail(user.email || '');
     setPaymentReference(
-      'REC-' + Math.floor(100000 + Math.random() * 900000)
+      'PAG-EFI-' + Math.floor(100000 + Math.random() * 900000)
     );
     if (type === 'CREDITO_COMPLETO') {
       setCustomPaymentAmount(saldoPendiente);
@@ -270,9 +390,167 @@ export const Dashboard: React.FC<DashboardProps> = ({
       type === 'CUOTA_PERSONALIZADA' &&
       (customPaymentAmount <= 0 || customPaymentAmount > saldoPendiente)
     ) {
-      setCustomPaymentAmount(saldoPendiente);
+      setCustomPaymentAmount(valorCuota > 0 ? valorCuota : saldoPendiente);
     }
     setPaymentModalType(type);
+  };
+
+  const handleCancelPaymentGateway = async () => {
+    const amountAttempted =
+      paymentModalType === 'CREDITO_COMPLETO'
+        ? saldoPendiente
+        : paymentModalType === 'CUOTA_PERSONALIZADA'
+        ? Math.min(saldoPendiente, Math.max(1, customPaymentAmount))
+        : valorCuota;
+
+    const channelObj =
+      EFIPAY_CHANNELS.find(c => c.id === efipayChannel) || EFIPAY_CHANNELS[0];
+    const refCancel =
+      paymentReference ||
+      `CANC-EFI-${Math.floor(100000 + Math.random() * 900000)}`;
+
+    const cancelRes = await StorageService.recordCancelledPayment(
+      user.id,
+      amountAttempted,
+      channelObj.shortName,
+      {
+        paymentNumber: refCancel,
+        payerFullName: payerFullName.trim() || user.fullName,
+        payerCedula: payerCedula.trim() || user.cedula,
+        payerEmail: payerEmail.trim() || user.email
+      }
+    );
+
+    if (cancelRes.user) {
+      setUser(cancelRes.user);
+    }
+    setCancelledPaymentRef(cancelRes.paymentNumber || refCancel);
+    setPaymentOutcomeStatus('PAGO_CANCELADO');
+    setPaymentSuccessMessage(null);
+    setEfipayReceipt(null);
+
+    await fintechPanelsEngine.encryptAndBroadcastChange({
+      action: 'CLIENT_LOAN_PAYMENT_CANCELLED',
+      userId: user.id,
+      paymentNumber: cancelRes.paymentNumber || refCancel,
+      status: 'PAGO_CANCELADO'
+    });
+  };
+
+  const handleDownloadReceiptPdf = (receiptData: EfipayEncryptedReceipt) => {
+    const doc = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4'
+    });
+
+    // Encabezado Institucional Morado
+    doc.setFillColor(88, 28, 135);
+    doc.rect(0, 0, 210, 42, 'F');
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(15);
+    doc.text('PASARELA DE PAGOS EFIPAY E2EE', 15, 17);
+
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text(
+      'COMPROBANTE OFICIAL DE PAGO IDENTIFICADO VÍA API • AES-256-GCM + HMAC-SHA256',
+      15,
+      25
+    );
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text(`NÚMERO DE PAGO: ${receiptData.transactionId}`, 15, 34);
+
+    // Estado PAGO PROCESADO
+    doc.setFillColor(236, 253, 245);
+    doc.setDrawColor(16, 185, 129);
+    doc.roundedRect(15, 50, 180, 18, 2, 2, 'FD');
+    doc.setTextColor(6, 95, 70);
+    doc.setFontSize(13);
+    doc.text('ESTADO DE LA OPERACIÓN: PAGO PROCESADO', 22, 61);
+
+    // Bloque 1: Identificación del Pagador (Encuesta de Pago)
+    doc.setTextColor(59, 7, 100);
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.text('1. IDENTIFICACIÓN DEL PAGADOR (ENCUESTA DE PAGO)', 15, 80);
+
+    doc.setDrawColor(216, 180, 254);
+    doc.line(15, 83, 195, 83);
+
+    doc.setFontSize(10);
+    doc.setTextColor(30, 41, 59);
+    const rowsPayer = [
+      ['Nombre Completo:', payerFullName.trim() || user.fullName],
+      ['Cédula de Ciudadanía:', payerCedula.trim() || user.cedula],
+      ['Correo Electrónico:', payerEmail.trim() || user.email],
+      ['Medio de Pago Elegido:', `${receiptData.channelLabel} (${receiptData.maskedInstrument})`],
+      ['Trámite de Crédito:', user.creditTramiteId]
+    ];
+
+    let y = 91;
+    rowsPayer.forEach(([label, val]) => {
+      doc.setFont('helvetica', 'bold');
+      doc.text(label, 18, y);
+      doc.setFont('helvetica', 'normal');
+      doc.text(String(val), 75, y);
+      y += 8;
+    });
+
+    // Bloque 2: Liquidación y Número de Pago Cargado en Admin
+    y += 6;
+    doc.setTextColor(59, 7, 100);
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.text('2. DETALLE FINANCIERO Y REGISTRO EN PANEL ADMIN', 15, y);
+    doc.line(15, y + 3, 195, y + 3);
+    y += 11;
+
+    doc.setTextColor(30, 41, 59);
+    doc.setFontSize(10);
+    const rowsFinance = [
+      ['Número de Pago (Panel Admin):', receiptData.transactionId],
+      ['Código de Autorización API:', receiptData.authorizationCode],
+      ['Referencia de Recaudo:', receiptData.referenceCode],
+      ['Valor Pagado en Pasarela:', formatMoney(receiptData.amount)],
+      ['Saldo Restante del Crédito:', formatMoney(user.availableBalance)],
+      ['Fecha y Hora de Liquidación:', new Date(receiptData.settledAt).toLocaleString('es-CO')]
+    ];
+
+    rowsFinance.forEach(([label, val]) => {
+      doc.setFont('helvetica', 'bold');
+      doc.text(label, 18, y);
+      doc.setFont('helvetica', 'normal');
+      doc.text(String(val), 75, y);
+      y += 8;
+    });
+
+    // Bloque 3: Sello Criptográfico Efipay E2EE
+    y += 8;
+    doc.setFillColor(250, 245, 255);
+    doc.setDrawColor(192, 132, 252);
+    doc.roundedRect(15, y, 180, 34, 2, 2, 'FD');
+
+    doc.setTextColor(88, 28, 135);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.text('CERTIFICACIÓN CRIPTOGRÁFICA DE INTEGRIDAD EFIPAY E2EE', 20, y + 8);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.text(`Token PCI-DSS: ${receiptData.instrumentToken}`, 20, y + 15);
+    doc.text(`Estándar Cifrado: ${receiptData.encryptionStandard}`, 20, y + 21);
+    doc.text(
+      `Firma HMAC-SHA256: ${receiptData.receiptSignature.slice(0, 64)}`,
+      20,
+      y + 27
+    );
+
+    doc.save(`Comprobante_Efipay_${receiptData.transactionId}.pdf`);
   };
 
   const handleConfirmPayment = async (e: React.FormEvent) => {
@@ -287,34 +565,114 @@ export const Dashboard: React.FC<DashboardProps> = ({
         : valorCuota;
     if (amountToPay <= 0) return;
 
+    // Validación de los datos de la encuesta de identificación del cliente
+    setEfipayError(null);
+    if (!payerFullName.trim() || payerFullName.trim().length < 3) {
+      setEfipayError('Por favor ingresa tu Nombre Completo en la encuesta de identificación.');
+      return;
+    }
+    if (!payerCedula.trim() || payerCedula.replace(/\D/g, '').length < 5) {
+      setEfipayError('Por favor ingresa un número de Cédula de Ciudadanía válido.');
+      return;
+    }
+    if (!payerEmail.trim() || !payerEmail.includes('@')) {
+      setEfipayError('Por favor ingresa un Correo Electrónico válido para el comprobante Efipay.');
+      return;
+    }
+
+    // Validación de campos según el medio de pago Efipay seleccionado
+    if (efipayChannel === 'EFIPAY_CARD') {
+      const cleanCard = cardNumber.replace(/\D/g, '');
+      if (cleanCard.length < 13 || cleanCard.length > 19) {
+        setEfipayError('Ingresa un número de tarjeta válido (13 a 19 dígitos) para tokenizar.');
+        return;
+      }
+      if (!/^\d{2}\/\d{2}$/.test(cardExpiry.trim())) {
+        setEfipayError('Ingresa la fecha de vencimiento en formato MM/AA.');
+        return;
+      }
+      if (cardCvv.replace(/\D/g, '').length < 3) {
+        setEfipayError('Ingresa el código de seguridad CVV para el cifrado efímero.');
+        return;
+      }
+    } else if (
+      (efipayChannel === 'EFIPAY_NEQUI' || efipayChannel === 'EFIPAY_BANCOLOMBIA') &&
+      walletPhone.replace(/\D/g, '').length < 10
+    ) {
+      setEfipayError('Ingresa un número celular o cuenta vinculada válida (mínimo 10 dígitos).');
+      return;
+    }
+
     setIsProcessingPayment(true);
     try {
+      // 1. Procesar pago en la bóveda criptográfica Efipay E2EE (AES-256-GCM + PBKDF2 + HMAC-SHA256)
+      const receipt = await EfipayService.processEncryptedPayment({
+        userId: user.id,
+        cedula: payerCedula.trim(),
+        fullName: payerFullName.trim(),
+        email: payerEmail.trim(),
+        tramiteId: user.creditTramiteId,
+        amount: amountToPay,
+        paymentType: paymentModalType,
+        channel: efipayChannel,
+        referenceCode: paymentReference,
+        pseBank,
+        psePersonType,
+        cardNumber,
+        cardExpiry,
+        cardCvv,
+        cardInstallments,
+        walletPhone
+      });
+
+      // Purgar inmediatamente de la memoria RAM cualquier dato sensible de tarjeta (PCI-DSS Zero-Retention)
+      setCardNumber('');
+      setCardCvv('');
+      setCardExpiry('');
+
       const storagePayType =
         paymentModalType === 'CREDITO_COMPLETO'
           ? 'TOTALIDAD'
           : paymentModalType;
+
+      const auditMethodLabel = `${receipt.channelLabel} [Efipay N° Pago: ${receipt.transactionId} | Auth: ${receipt.authorizationCode}]`;
+
       const result = await StorageService.payLoan(
         user.id,
         amountToPay,
         storagePayType,
-        paymentMethod
+        auditMethodLabel,
+        {
+          paymentNumber: receipt.transactionId,
+          transactionId: receipt.transactionId,
+          authorizationCode: receipt.authorizationCode,
+          payerFullName: payerFullName.trim(),
+          payerCedula: payerCedula.trim(),
+          payerEmail: payerEmail.trim()
+        }
       );
+
       if (result.success && result.user) {
         setUser(result.user);
-        setPaymentSuccessMessage(result.message);
+        setEfipayReceipt(receipt);
+        setLastCompletedReceipt(receipt);
+        setPaymentOutcomeStatus('PAGO_PROCESADO');
+        setPaymentSuccessMessage('PAGO PROCESADO');
+        setIsPartialPaymentExpanded(false);
         await fintechPanelsEngine.encryptAndBroadcastChange({
           action: 'CLIENT_LOAN_PAYMENT',
           userId: user.id,
           amount: amountToPay,
-          remainingBalance: result.user.availableBalance
+          remainingBalance: result.user.availableBalance,
+          efipayTransactionId: receipt.transactionId,
+          paymentNumber: receipt.transactionId,
+          status: 'PAGO_PROCESADO'
         });
-        setTimeout(() => {
-          setPaymentModalType(null);
-          setPaymentSuccessMessage(null);
-        }, 1000);
+      } else {
+        await handleCancelPaymentGateway();
       }
     } catch {
-      // Manejo silencioso conforme a Zero-Plaintext Policy
+      await handleCancelPaymentGateway();
     } finally {
       setIsProcessingPayment(false);
     }
@@ -438,110 +796,103 @@ export const Dashboard: React.FC<DashboardProps> = ({
           <>
             {/* =========================================================================
                 CASO C: CRÉDITO EN PROCESO DE DESEMBOLSO O CRÉDITO ACTIVO CON SALDO
-                1. CÍRCULO DE ESTADO FINANCIERO + NOMBRE DEL CLIENTE ABAJO
+                1. TARJETA BLANCA DE ESTADO DE PAGO CON SOMBRA SUAVE
                ========================================================================= */}
-            <div className="py-2 flex flex-col items-center justify-center animate-fadeIn space-y-4 sm:space-y-5">
-              <div className="relative flex items-center justify-center shrink-0 mx-auto max-w-full">
-                <svg
-                  className="w-60 h-60 sm:w-72 sm:h-72 md:w-76 md:h-76 -rotate-90 transform"
-                  viewBox="0 0 260 260"
-                >
-                  <circle
-                    cx="130"
-                    cy="130"
-                    r={radius}
-                    fill="transparent"
-                    stroke={circleTheme.trackColor}
-                    strokeWidth="14"
-                  />
-                  <circle
-                    cx="130"
-                    cy="130"
-                    r={radius}
-                    fill="transparent"
-                    stroke={circleTheme.strokeColor}
-                    strokeWidth="14"
-                    strokeDasharray={circumference}
-                    strokeDashoffset={strokeDashoffset}
-                    strokeLinecap="round"
-                  />
-                </svg>
+            <div className="bg-white rounded-xl p-5 sm:p-6 shadow-sm border border-gray-100 flex flex-col items-start text-left space-y-2.5 animate-fadeIn">
+              {/* Esquina izquierda: "Estado de pago" en color negro */}
+              <span className="text-sm sm:text-base font-bold text-black">
+                Estado de pago
+              </span>
 
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-5 sm:p-6">
-                  <span
-                    className={`px-2 sm:px-2.5 py-0.5 rounded text-[9px] sm:text-[10px] font-extrabold uppercase tracking-wider ${circleTheme.badgeClass} mb-1.5 sm:mb-2 max-w-[180px] sm:max-w-none truncate`}
-                  >
-                    {circleTheme.statusLabel}
-                  </span>
+              {/* Debajo: texto de instancia encerrado en un rectángulo con bordes redondos */}
+              <span
+                className={`inline-flex items-center px-3 py-1 rounded-lg text-xs sm:text-sm font-semibold ${paymentStatusInstance.badgeClass}`}
+              >
+                {paymentStatusInstance.label}
+              </span>
 
-                  <div className="flex items-center gap-1.5 text-[11px] sm:text-xs font-bold text-purple-900">
-                    <span>
-                      {isDisbursementInProcess
-                        ? 'Monto en Desembolso'
-                        : 'Préstamo / Deuda'}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setHideBalance(!hideBalance)}
-                      className="text-purple-600 hover:text-purple-950 transition cursor-pointer p-0.5"
-                      title="Mostrar / Ocultar valor"
-                    >
-                      {hideBalance ? (
-                        <Eye className="w-3.5 h-3.5" />
-                      ) : (
-                        <EyeOff className="w-3.5 h-3.5" />
-                      )}
-                    </button>
-                  </div>
-
-                  <div
-                    className={`text-xl sm:text-2xl md:text-3xl font-extrabold font-mono tracking-tight my-1 max-w-[195px] sm:max-w-[235px] truncate ${circleTheme.textAccent}`}
-                  >
-                    {hideBalance
-                      ? '••••••••••'
-                      : isDisbursementInProcess
-                      ? formatMoney(
-                          user.disbursementRequest?.requestedAmount ||
-                            user.creditLimit
-                        )
-                      : formatMoney(saldoPendiente)}
-                  </div>
-
-                  <div className="text-[11px] sm:text-xs text-purple-800 font-mono max-w-[190px] sm:max-w-none truncate">
-                    {isDisbursementInProcess ? (
-                      <>
-                        Ref:{' '}
-                        <strong>
-                          {user.disbursementRequest?.bankApiReference ||
-                            user.creditTramiteId}
-                        </strong>
-                      </>
-                    ) : (
-                      <>
-                        Otorgado:{' '}
-                        <strong>
-                          {hideBalance ? '••••••' : formatMoney(montoPrestado)}
-                        </strong>
-                      </>
-                    )}
-                  </div>
-
-                  <div className="text-[10px] sm:text-[11px] font-semibold text-purple-700 mt-1 max-w-[180px] sm:max-w-[220px] leading-tight">
-                    {circleTheme.timeDesc}
-                  </div>
-                </div>
+              {/* Más abajo: de color morado el valor de la cuota (solo el valor, ej. "$254,826.95") */}
+              <div className="text-2xl sm:text-3xl font-extrabold text-purple-700 tracking-tight pt-1">
+                {formatInstallmentValue(valorCuotaCard)}
               </div>
 
-              {/* Nombre del cliente abajo del círculo */}
-              <div className="text-center animate-fadeIn pt-1 px-2">
-                <div className="text-xs font-semibold text-purple-700 mb-0.5">
-                  Bienvenido/a
-                </div>
-                <h1 className="text-xl sm:text-3xl font-extrabold text-purple-950 tracking-tight break-words">
-                  {user.fullName}
-                </h1>
-              </div>
+              {/* Debajo: en color gris y más pequeño "Pagar antes de (fecha y hora en gris un poquito más marcado)" */}
+              <p className="text-xs sm:text-sm text-gray-500">
+                Pagar antes de{' '}
+                <span className="text-gray-700 font-semibold">
+                  {installmentDeadlineText}
+                </span>
+              </p>
             </div>
+
+            {/* =========================================================================
+                2. DOS CUADRADOS CON BORDES REDONDOS DEBAJO: "PAGAR" Y "RETIRAR"
+               ========================================================================= */}
+            {!isDisbursementInProcess && (
+              <div className="flex items-center justify-center gap-6 pt-1 animate-fadeIn">
+                {/* Primer cuadrado: signo de pesos encerrado en dos flechas circulares + "Pagar" */}
+                <div className="flex flex-col items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={saldoPendiente <= 0}
+                    onClick={() => {
+                      setPaymentModalType(null);
+                      setPaymentOutcomeStatus(null);
+                      setEfipayError(null);
+                      setIsCustomAmountExpanded(false);
+                      setIsPaySelectionWindowOpen(true);
+                    }}
+                    className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-white border border-gray-200 shadow-xs hover:bg-purple-50 hover:border-purple-300 active:scale-95 disabled:opacity-50 transition flex items-center justify-center text-purple-800 cursor-pointer disabled:cursor-not-allowed"
+                    aria-label="Pagar"
+                  >
+                    <svg
+                      className="w-7 h-7 sm:w-8 sm:h-8 text-purple-800"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+                      <path d="M21 3v5h-5" />
+                      <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+                      <path d="M3 21v-5h5" />
+                      <path d="M12 7.5v9" />
+                      <path d="M14.2 9.5c0-1.1-1-1.8-2.2-1.8s-2.2.7-2.2 1.8c0 2.2 4.4 1.4 4.4 3.6 0 1.1-1 1.8-2.2 1.8s-2.2-.7-2.2-1.8" />
+                    </svg>
+                  </button>
+                  <span className="text-xs sm:text-sm font-semibold text-gray-900">
+                    Pagar
+                  </span>
+                </div>
+
+                {/* Segundo cuadrado: flecha hacia arriba + "Retirar" (sin función alguna) */}
+                <div className="flex flex-col items-center gap-1.5">
+                  <button
+                    type="button"
+                    className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-white border border-gray-200 shadow-xs flex items-center justify-center text-purple-800 cursor-default"
+                    aria-label="Retirar"
+                  >
+                    <svg
+                      className="w-7 h-7 sm:w-8 sm:h-8 text-purple-800"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M12 19V5" />
+                      <path d="m5 12 7-7 7 7" />
+                    </svg>
+                  </button>
+                  <span className="text-xs sm:text-sm font-semibold text-gray-900">
+                    Retirar
+                  </span>
+                </div>
+              </div>
+            )}
 
             {isDisbursementInProcess ? (
               <LoanRequestFlow
@@ -556,292 +907,814 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 }}
               />
             ) : (
-              /* =========================================================================
-                 SUBCASO C2: CRÉDITO ACTIVO CON SALDO PENDIENTE -> CUADRO DE PAGO EN LÍNEA
-                 ========================================================================= */
-              <div className="bg-white border border-purple-200 rounded p-4 sm:p-7 shadow-xs space-y-5 animate-fadeIn">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-4 border-b border-purple-100">
-                  <div className="flex items-start sm:items-center gap-2.5">
-                    <div className="w-8 h-8 rounded bg-purple-700 flex items-center justify-center text-white shrink-0 mt-0.5 sm:mt-0">
-                      <Banknote className="w-4 h-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <h2 className="text-sm sm:text-base font-extrabold text-purple-950 tracking-tight">
-                        Opciones de Pago de tu Crédito
-                      </h2>
-                      <p className="text-xs text-purple-700/80 leading-relaxed">
-                        {isOverdue
-                          ? 'Por presentar estado en mora, únicamente está habilitado el pago total del crédito'
-                          : 'Realiza el pago de tu cuota mensual o abona el total para terminar tu crédito y habilitar uno nuevo'}
-                      </p>
-                    </div>
-                  </div>
+              <>
+                {/* Banner de Estado de Pago para el Cliente (PAGO PROCESADO / PAGO CANCELADO) */}
+                {paymentOutcomeStatus === 'PAGO_PROCESADO' &&
+                  lastCompletedReceipt &&
+                  !paymentModalType && (
+                    <div className="p-4 sm:p-5 rounded-xl bg-emerald-50/90 border border-emerald-400 space-y-3 animate-fadeIn">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex items-start sm:items-center gap-3">
+                          <div className="w-10 h-10 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                            <CheckCircle2 className="w-6 h-6" />
+                          </div>
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm sm:text-base font-extrabold text-emerald-950 uppercase tracking-wide">
+                                PAGO PROCESADO
+                              </span>
+                              <span className="text-[11px] font-mono font-bold bg-white text-emerald-900 border border-emerald-300 px-2.5 py-0.5 rounded">
+                                N° Pago: {lastCompletedReceipt.transactionId}
+                              </span>
+                            </div>
+                            <p className="text-xs text-emerald-800 mt-0.5">
+                              Pago registrado por{' '}
+                              <strong>
+                                {formatMoney(lastCompletedReceipt.amount)}
+                              </strong>{' '}
+                              ({lastCompletedReceipt.channelLabel}).
+                            </p>
+                          </div>
+                        </div>
 
-                  <span className="text-xs font-mono font-bold text-purple-900 bg-purple-50 px-3 py-1 rounded border border-purple-200 self-start sm:self-center shrink-0 whitespace-nowrap">
-                    Obligación Vigente
-                  </span>
-                </div>
-
-                {isOverdue ? (
-                  <div className="p-4 sm:p-5 rounded bg-rose-50/50 border border-rose-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div className="space-y-1.5 min-w-0">
-                      <div className="flex items-center gap-2 text-rose-700">
-                        <AlertTriangle className="w-4 h-4 shrink-0" />
-                        <span className="text-xs font-extrabold uppercase tracking-wider">
-                          Pagar Crédito Completo (Obligación en Mora)
-                        </span>
-                      </div>
-                      <p className="text-xs text-purple-800/80">
-                        Cancela la totalidad del saldo vencido para normalizar
-                        tu estado y habilitar un nuevo crédito.
-                      </p>
-                      <div className="pt-1 flex flex-wrap items-baseline gap-2">
-                        <span className="text-xs font-semibold text-purple-700 uppercase">
-                          Total a Pagar:
-                        </span>
-                        <span className="text-xl sm:text-3xl font-extrabold text-rose-700 font-mono tracking-tight">
-                          {hideBalance
-                            ? '••••••••••'
-                            : formatMoney(saldoPendiente)}
-                        </span>
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleDownloadReceiptPdf(lastCompletedReceipt)
+                            }
+                            className="w-full sm:w-auto px-4 py-2.5 bg-purple-800 hover:bg-purple-950 text-white text-xs font-extrabold rounded-lg flex items-center justify-center gap-2 cursor-pointer transition shadow-xs"
+                          >
+                            <Download className="w-4 h-4 shrink-0" />
+                            <span>DESCARGAR COMPROBANTE</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
+                  )}
 
-                    <button
-                      type="button"
-                      disabled={saldoPendiente <= 0}
-                      onClick={() => handleOpenPaymentPanel('CREDITO_COMPLETO')}
-                      className="w-full sm:w-auto sm:min-w-[240px] py-3.5 px-5 bg-rose-600 hover:bg-rose-700 disabled:bg-purple-200 disabled:text-purple-500 text-white font-bold text-xs rounded transition flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed shrink-0"
-                    >
-                      <CreditCard className="w-4 h-4 shrink-0" />
-                      <span>
-                        Pagar Crédito Completo (
-                        {hideBalance ? '••••••' : formatMoney(saldoPendiente)})
-                      </span>
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex flex-col space-y-4">
-                    {/* Opción 1: Pagar Cuota */}
-                    <div className="w-full p-4 sm:p-5 rounded bg-[#fcfaff] border border-purple-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                      <div className="space-y-1.5 min-w-0">
-                        <span className="text-xs font-extrabold uppercase tracking-wider text-purple-900 flex items-center gap-1.5">
-                          <Receipt className="w-4 h-4 text-purple-700 shrink-0" />
-                          <span>Pagar Cuota</span>
-                        </span>
-
-                        <div className="pt-1 flex flex-wrap items-baseline gap-2">
-                          <span className="text-[11px] font-semibold text-purple-700 uppercase">
-                            Valor de la Cuota:
-                          </span>
-                          <span className="text-xl sm:text-2xl font-extrabold text-purple-950 font-mono tracking-tight">
-                            {hideBalance
-                              ? '••••••••••'
-                              : formatMoney(valorCuota)}
-                          </span>
+                {paymentOutcomeStatus === 'PAGO_CANCELADO' &&
+                  !paymentModalType && (
+                    <div className="p-4 sm:p-5 rounded-xl bg-rose-50 border border-rose-400 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fadeIn">
+                      <div className="flex items-start sm:items-center gap-3">
+                        <div className="w-10 h-10 rounded-lg bg-rose-600 text-white flex items-center justify-center shrink-0">
+                          <XCircle className="w-6 h-6" />
+                        </div>
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm sm:text-base font-extrabold text-rose-950 uppercase tracking-wide">
+                              PAGO CANCELADO
+                            </span>
+                            {cancelledPaymentRef && (
+                              <span className="text-[11px] font-mono font-bold bg-white text-rose-900 border border-rose-300 px-2.5 py-0.5 rounded">
+                                Ref: {cancelledPaymentRef}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-rose-800 mt-0.5">
+                            La operación no fue completada. No se descontó
+                            ningún valor de tu saldo.
+                          </p>
                         </div>
                       </div>
 
                       <button
                         type="button"
-                        disabled={valorCuota <= 0}
-                        onClick={() => handleOpenPaymentPanel('CUOTA')}
-                        className="w-full sm:w-auto sm:min-w-[230px] py-3 px-4 bg-purple-700 hover:bg-purple-800 disabled:bg-purple-200 disabled:text-purple-500 text-white font-bold text-xs rounded transition flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed shrink-0"
+                        onClick={() => setPaymentOutcomeStatus(null)}
+                        className="px-3.5 py-2 bg-white hover:bg-rose-100 text-rose-900 border border-rose-300 text-xs font-bold rounded-lg cursor-pointer self-start sm:self-center shrink-0"
                       >
-                        <CreditCard className="w-4 h-4 shrink-0" />
-                        <span>
-                          Pagar Cuota (
-                          {hideBalance ? '••••••' : formatMoney(valorCuota)})
-                        </span>
+                        Entendido
                       </button>
                     </div>
+                  )}
 
-                    {/* Opción 2: Pagar Cuota Personalizada o Terminar Crédito */}
-                    <div className="w-full p-4 sm:p-5 rounded bg-purple-50/40 border border-purple-200 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                      <div className="space-y-2.5 flex-1 min-w-0">
-                        <span className="text-xs font-extrabold uppercase tracking-wider text-purple-950 flex items-center gap-1.5">
-                          <Wallet className="w-4 h-4 text-purple-700 shrink-0" />
-                          <span>
-                            Pagar Cuota Personalizada / Terminar Crédito
+                {/* =========================================================================
+                    VENTANA EN TODA LA PANTALLA AL DAR CLIC EN "PAGAR": "¿Cuánto deseas pagar?"
+                   ========================================================================= */}
+                {isPaySelectionWindowOpen && !paymentModalType && (
+                  <div className="fixed inset-0 top-0 left-0 right-0 bottom-0 w-screen h-screen min-h-dvh z-[9999] bg-[#fcfaff] overflow-y-auto flex flex-col animate-fadeIn">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsPaySelectionWindowOpen(false);
+                        setIsCustomAmountExpanded(false);
+                      }}
+                      aria-label="Cerrar"
+                      className="absolute top-4 right-4 z-50 p-2 text-gray-600 hover:text-black rounded-full cursor-pointer transition"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+
+                    <div className="w-full max-w-xl mx-auto px-5 sm:px-8 pt-12 pb-8 flex flex-col space-y-6">
+                      <div className="space-y-1.5 text-left">
+                        <h2 className="text-xl sm:text-2xl font-extrabold text-black tracking-tight">
+                          ¿Cuánto deseas pagar?
+                        </h2>
+                        <p className="text-xs sm:text-sm">
+                          <span className="text-emerald-600 font-semibold">
+                            Pagar antes de{' '}
                           </span>
-                        </span>
+                          <span className="text-gray-500">
+                            {installmentDeadlineText}
+                          </span>
+                        </p>
+                      </div>
 
-                        <div className="pt-1 flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2.5">
-                          <div className="flex flex-col xs:flex-row sm:flex-row sm:items-center gap-1.5 sm:gap-2 w-full sm:w-auto">
-                            <span className="text-[11px] font-semibold text-purple-700 uppercase whitespace-nowrap">
-                              Monto a Abonar (COP):
-                            </span>
-                            <input
-                              type="number"
-                              min={10000}
-                              max={
-                                saldoPendiente > 0 ? saldoPendiente : undefined
-                              }
-                              step={50000}
-                              disabled={saldoPendiente <= 0}
-                              value={customPaymentAmount || ''}
-                              onChange={e => {
-                                const val = Number(e.target.value);
+                      {/* 3 Rectángulos con bordes redondos uno encima de otro */}
+                      <div className="flex flex-col space-y-3">
+                        {/* 1. Pago mínimo */}
+                        <button
+                          type="button"
+                          onClick={() => handleOpenPaymentPanel('CUOTA')}
+                          className="w-full bg-white hover:bg-purple-50/50 border border-gray-200 rounded-2xl px-5 py-4 shadow-2xs flex items-center justify-between text-left transition cursor-pointer"
+                        >
+                          <span className="text-sm sm:text-base font-bold text-gray-900">
+                            Pago mínimo
+                          </span>
+                          <span className="text-sm sm:text-base font-extrabold text-gray-900">
+                            {formatDotCurrency(valorCuotaCard)}
+                          </span>
+                        </button>
+
+                        {/* 2. Saldo restante */}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleOpenPaymentPanel('CREDITO_COMPLETO')
+                          }
+                          className="w-full bg-white hover:bg-purple-50/50 border border-gray-200 rounded-2xl px-5 py-4 shadow-2xs flex items-center justify-between text-left transition cursor-pointer"
+                        >
+                          <span className="text-sm sm:text-base font-bold text-gray-900">
+                            Saldo restante
+                          </span>
+                          <span className="text-sm sm:text-base font-extrabold text-gray-900">
+                            {formatDotCurrency(saldoPendiente)}
+                          </span>
+                        </button>
+
+                        {/* 3. Otro monto (desplegable para ingresar el monto a pagar) */}
+                        <div className="w-full bg-white border border-gray-200 rounded-2xl shadow-2xs overflow-hidden transition-all">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsCustomAmountExpanded(prev => !prev);
+                              if (!customPaymentAmount || customPaymentAmount <= 0) {
                                 setCustomPaymentAmount(
-                                  saldoPendiente > 0
-                                    ? Math.min(
-                                        saldoPendiente,
-                                        Math.max(0, val)
-                                      )
-                                    : 0
+                                  valorCuota > 0 ? valorCuota : saldoPendiente
                                 );
-                              }}
-                              className="w-full sm:w-44 px-3 py-2 sm:py-1.5 rounded bg-white border border-purple-300 text-purple-950 font-mono font-extrabold text-sm focus:border-purple-700 focus:outline-none disabled:opacity-50"
-                              placeholder="Ingrese valor"
-                            />
-                          </div>
-
-                          {saldoPendiente > 0 && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setCustomPaymentAmount(saldoPendiente)
                               }
-                              className="text-[11px] font-bold text-purple-800 hover:text-purple-950 bg-white hover:bg-purple-100 px-3 py-1.5 sm:py-1 rounded border border-purple-300 transition cursor-pointer self-start sm:self-auto"
-                            >
-                              Usar Saldo Total (
-                              {hideBalance
-                                ? '••••••'
-                                : formatMoney(saldoPendiente)}
-                              )
-                            </button>
+                            }}
+                            className="w-full px-5 py-4 flex items-center justify-between text-left hover:bg-purple-50/50 transition cursor-pointer"
+                          >
+                            <span className="text-sm sm:text-base font-bold text-gray-900">
+                              Otro monto
+                            </span>
+                            <span className="text-xs text-gray-400 font-semibold">
+                              {isCustomAmountExpanded ? 'Ocultar' : 'Ingresar valor'}
+                            </span>
+                          </button>
+
+                          {isCustomAmountExpanded && (
+                            <div className="px-5 pb-5 pt-1 border-t border-gray-100 flex flex-col space-y-3 animate-fadeIn">
+                              <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                                <div className="relative flex-1">
+                                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-sm">
+                                    $
+                                  </span>
+                                  <input
+                                    type="text"
+                                    inputMode="numeric"
+                                    value={
+                                      customPaymentAmount && customPaymentAmount > 0
+                                        ? new Intl.NumberFormat('es-CO', {
+                                            maximumFractionDigits: 0
+                                          }).format(customPaymentAmount)
+                                        : ''
+                                    }
+                                    onChange={e => {
+                                      const raw = e.target.value.replace(/\D/g, '');
+                                      const val = raw ? Number(raw) : 0;
+                                      setCustomPaymentAmount(
+                                        saldoPendiente > 0
+                                          ? Math.min(saldoPendiente, Math.max(0, val))
+                                          : val
+                                      );
+                                    }}
+                                    placeholder="0"
+                                    className="w-full pl-8 pr-3.5 py-2.5 rounded-xl border border-gray-300 text-gray-900 font-bold text-sm focus:border-purple-600 focus:outline-none"
+                                    autoFocus
+                                  />
+                                </div>
+                                <button
+                                  type="button"
+                                  disabled={!customPaymentAmount || customPaymentAmount <= 0}
+                                  onClick={() => handleOpenPaymentPanel('CUOTA_PERSONALIZADA')}
+                                  className="px-5 py-2.5 bg-purple-700 hover:bg-purple-800 disabled:bg-gray-200 disabled:text-gray-400 text-white font-bold text-xs sm:text-sm rounded-xl transition cursor-pointer disabled:cursor-not-allowed shrink-0"
+                                >
+                                  Continuar
+                                </button>
+                              </div>
+                              {saldoPendiente > 0 && (
+                                <p className="text-[11px] text-gray-500">
+                                  Saldo máximo a pagar: <strong>{formatDotCurrency(saldoPendiente)}</strong>
+                                </p>
+                              )}
+                            </div>
                           )}
                         </div>
                       </div>
-
-                      <button
-                        type="button"
-                        disabled={
-                          saldoPendiente <= 0 || customPaymentAmount <= 0
-                        }
-                        onClick={() =>
-                          handleOpenPaymentPanel('CUOTA_PERSONALIZADA')
-                        }
-                        className="w-full lg:w-auto lg:min-w-[230px] py-3 px-4 bg-purple-950 hover:bg-purple-900 disabled:bg-purple-200 disabled:text-purple-500 text-white font-bold text-xs rounded transition flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed shrink-0"
-                      >
-                        <CheckCircle2 className="w-4 h-4 shrink-0" />
-                        <span>
-                          Pagar ({hideBalance
-                            ? '••••••'
-                            : formatMoney(customPaymentAmount)}
-                          )
-                        </span>
-                      </button>
                     </div>
                   </div>
                 )}
 
-                {/* Panel Integrado de Confirmación de Pago en Línea (Cero Modales) */}
+                {/* =========================================================================
+                    PANEL A PANTALLA COMPLETA DE PAGO CONECTADO A LA PASARELA
+                   ========================================================================= */}
                 {paymentModalType && (
-                  <div className="mt-4 p-4 sm:p-5 bg-purple-50/70 border-2 border-purple-600 rounded space-y-4 animate-fadeIn">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-purple-200 pb-2.5">
-                      <div>
-                        <h3 className="text-sm font-extrabold text-purple-950">
-                          {paymentModalType === 'CREDITO_COMPLETO'
-                            ? 'Confirmar Pago de Crédito Completo'
-                            : paymentModalType === 'CUOTA_PERSONALIZADA'
-                            ? 'Confirmar Pago Personalizado'
-                            : 'Confirmar Pago de Cuota'}
-                        </h3>
-                        <p className="text-[11px] text-purple-700">
-                          Recaudo en línea aplicado al trámite Ref:{' '}
-                          <strong>{user.creditTramiteId}</strong>
-                        </p>
-                      </div>
-                      <span className="font-mono text-xs font-bold text-purple-900 bg-white px-2.5 py-1 border border-purple-200 rounded self-start sm:self-auto">
-                        {paymentReference}
-                      </span>
-                    </div>
+                  <div className="fixed inset-0 top-0 left-0 right-0 bottom-0 w-screen h-screen min-h-dvh z-[9999] bg-[#fcfaff] overflow-y-auto flex flex-col animate-fadeIn">
+                    {/* Botón flotante accesible para cerrar y volver */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPaymentModalType(null);
+                        setEfipayError(null);
+                      }}
+                      aria-label="Cerrar y volver"
+                      className="absolute top-4 right-4 z-50 p-2 text-purple-700 hover:text-purple-950 hover:bg-purple-100 rounded-full cursor-pointer transition shadow-2xs border border-purple-200 bg-white"
+                      title="Volver"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
 
-                    {paymentSuccessMessage ? (
-                      <div className="py-4 text-center space-y-2 animate-fadeIn">
-                        <CheckCircle2 className="w-8 h-8 text-emerald-600 mx-auto" />
-                        <h4 className="text-sm font-bold text-purple-950">
-                          {paymentSuccessMessage}
-                        </h4>
-                      </div>
-                    ) : (
-                      <form
-                        onSubmit={handleConfirmPayment}
-                        className="space-y-4"
-                      >
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-                          <div className="p-3 bg-white border border-purple-200 rounded">
-                            <span className="text-purple-700 block">
-                              Deuda Actual:
-                            </span>
-                            <strong className="font-mono text-sm text-purple-950">
-                              {formatMoney(saldoPendiente)}
-                            </strong>
+                    {/* Contenedor Central Tipo Encuesta a Pantalla Completa */}
+                    <div className="w-full flex-1 px-4 sm:px-8 lg:px-12 py-6 sm:py-8 flex flex-col space-y-6">
+                      {paymentOutcomeStatus === 'PAGO_PROCESADO' &&
+                      efipayReceipt ? (
+                        <div className="w-full flex-1 bg-white border-2 border-emerald-500 rounded-2xl p-5 sm:p-8 lg:p-10 shadow-sm flex flex-col justify-between space-y-6 animate-fadeIn">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-emerald-200 pb-5">
+                            <div className="flex items-start sm:items-center gap-3.5">
+                              <div className="w-12 h-12 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                                <CheckCircle2 className="w-7 h-7" />
+                              </div>
+                              <div>
+                                <span className="inline-block text-[11px] font-mono font-extrabold uppercase tracking-wider bg-emerald-100 text-emerald-900 px-2.5 py-0.5 rounded border border-emerald-300">
+                                  Transacción Verificada
+                                </span>
+                                <h4 className="text-xl sm:text-2xl font-extrabold text-emerald-950 tracking-tight mt-1">
+                                  PAGO PROCESADO
+                                </h4>
+                                <p className="text-xs sm:text-sm text-emerald-800 font-medium">
+                                  Tu pago fue recibido e identificado
+                                  correctamente.
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="bg-emerald-50 border border-emerald-300 px-4 py-2.5 rounded-xl text-left sm:text-right shrink-0">
+                              <span className="text-[10px] font-bold uppercase text-emerald-800 block">
+                                Número de Pago
+                              </span>
+                              <strong className="font-mono text-base sm:text-lg font-extrabold text-emerald-950">
+                                {efipayReceipt.transactionId}
+                              </strong>
+                            </div>
                           </div>
 
-                          <div className="p-3 bg-white border border-purple-200 rounded">
-                            <span className="text-purple-700 block">
-                              Valor a Pagar Ahora:
-                            </span>
-                            <strong className="font-mono text-sm text-emerald-700">
-                              {formatMoney(
-                                paymentModalType === 'CREDITO_COMPLETO'
-                                  ? saldoPendiente
-                                  : paymentModalType === 'CUOTA_PERSONALIZADA'
-                                  ? customPaymentAmount
-                                  : valorCuota
-                              )}
-                            </strong>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
+                            <div className="p-3.5 bg-purple-50/60 border border-purple-200 rounded-xl">
+                              <span className="text-[10px] font-bold uppercase text-purple-700 block">
+                                Valor Pagado
+                              </span>
+                              <strong className="font-mono text-base text-emerald-700">
+                                {formatMoney(efipayReceipt.amount)}
+                              </strong>
+                            </div>
+                            <div className="p-3.5 bg-purple-50/60 border border-purple-200 rounded-xl">
+                              <span className="text-[10px] font-bold uppercase text-purple-700 block">
+                                Medio de Pago
+                              </span>
+                              <strong className="text-xs text-purple-950 block">
+                                {efipayReceipt.channelLabel}
+                              </strong>
+                              <span className="font-mono text-[11px] text-purple-700">
+                                {efipayReceipt.maskedInstrument}
+                              </span>
+                            </div>
+                            <div className="p-3.5 bg-purple-50/60 border border-purple-200 rounded-xl">
+                              <span className="text-[10px] font-bold uppercase text-purple-700 block">
+                                Código de Autorización
+                              </span>
+                              <strong className="font-mono text-sm text-purple-950">
+                                {efipayReceipt.authorizationCode}
+                              </strong>
+                            </div>
+                            <div className="p-3.5 bg-white border border-purple-200 rounded-xl">
+                              <span className="text-[10px] font-bold uppercase text-purple-700 block">
+                                Nombre Completo Pagador
+                              </span>
+                              <strong className="text-xs text-purple-950">
+                                {payerFullName}
+                              </strong>
+                            </div>
+                            <div className="p-3.5 bg-white border border-purple-200 rounded-xl">
+                              <span className="text-[10px] font-bold uppercase text-purple-700 block">
+                                Cédula de Ciudadanía
+                              </span>
+                              <strong className="font-mono text-xs text-purple-950">
+                                {payerCedula}
+                              </strong>
+                            </div>
+                            <div className="p-3.5 bg-white border border-purple-200 rounded-xl">
+                              <span className="text-[10px] font-bold uppercase text-purple-700 block">
+                                Correo Electrónico
+                              </span>
+                              <strong className="text-xs text-purple-950 break-all">
+                                {payerEmail}
+                              </strong>
+                            </div>
                           </div>
 
-                          <div>
-                            <label className="block text-[11px] font-bold text-purple-900 mb-1">
-                              Medio de Pago Autorizado
-                            </label>
-                            <select
-                              value={paymentMethod}
-                              onChange={e => setPaymentMethod(e.target.value)}
-                              className="w-full px-3 py-2 rounded bg-white border border-purple-300 text-xs text-purple-950 focus:border-purple-700 focus:outline-none"
+                          <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-purple-100">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleDownloadReceiptPdf(efipayReceipt)
+                              }
+                              className="w-full sm:w-auto px-6 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-extrabold rounded-xl flex items-center justify-center gap-2 cursor-pointer transition shadow-xs"
                             >
-                              <option value="PSE - Débito Bancario">
-                                PSE - Débito Bancario
-                              </option>
-                              <option value="Bancolombia">
-                                Transferencia Bancolombia
-                              </option>
-                              <option value="Nequi">Nequi</option>
-                              <option value="Davivienda">Davivienda</option>
-                              <option value="Banco de Bogotá">
-                                Banco de Bogotá
-                              </option>
-                            </select>
+                              <Download className="w-4 h-4 shrink-0" />
+                              <span>DESCARGAR COMPROBANTE</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPaymentModalType(null);
+                                setIsPaySelectionWindowOpen(false);
+                              }}
+                              className="w-full sm:w-auto px-6 py-3.5 bg-purple-800 hover:bg-purple-950 text-white text-xs sm:text-sm font-bold rounded-xl cursor-pointer transition"
+                            >
+                              Finalizar y Volver a mi Panel
+                            </button>
                           </div>
                         </div>
+                      ) : paymentOutcomeStatus === 'PAGO_CANCELADO' ? (
+                        <div className="w-full flex-1 bg-white border-2 border-rose-500 rounded-2xl p-5 sm:p-8 lg:p-10 shadow-sm flex flex-col justify-between space-y-5 animate-fadeIn">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-rose-200 pb-4">
+                            <div className="flex items-start sm:items-center gap-3.5">
+                              <div className="w-12 h-12 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0">
+                                <XCircle className="w-7 h-7" />
+                              </div>
+                              <div>
+                                <span className="inline-block text-[11px] font-mono font-extrabold uppercase tracking-wider bg-rose-100 text-rose-900 px-2.5 py-0.5 rounded border border-rose-300">
+                                  Notificación de Pago
+                                </span>
+                                <h4 className="text-xl sm:text-2xl font-extrabold text-rose-950 tracking-tight mt-1">
+                                  PAGO CANCELADO
+                                </h4>
+                                <p className="text-xs sm:text-sm text-rose-800 font-medium">
+                                  El pago no fue procesado o fue cancelado. No
+                                  se realizó ningún cargo a tu cuenta.
+                                </p>
+                              </div>
+                            </div>
 
-                        <div className="flex flex-col-reverse sm:flex-row gap-2 justify-end">
-                          <button
-                            type="button"
-                            onClick={() => setPaymentModalType(null)}
-                            className="w-full sm:w-auto px-4 py-2.5 sm:py-2 bg-white text-purple-800 text-xs font-semibold rounded border border-purple-300 hover:bg-purple-100 cursor-pointer"
-                          >
-                            Cancelar
-                          </button>
-                          <button
-                            type="submit"
-                            disabled={isProcessingPayment}
-                            className="w-full sm:w-auto px-5 py-2.5 sm:py-2 bg-purple-700 hover:bg-purple-800 text-white text-xs font-bold rounded border border-purple-800 cursor-pointer"
-                          >
-                            {isProcessingPayment
-                              ? 'Procesando...'
-                              : 'Confirmar Pago en Línea'}
-                          </button>
+                            <div className="bg-rose-50 border border-rose-300 px-4 py-2 rounded-xl">
+                              <span className="text-[10px] font-bold uppercase text-rose-800 block">
+                                Referencia Registrada
+                              </span>
+                              <strong className="font-mono text-sm font-extrabold text-rose-950">
+                                {cancelledPaymentRef || paymentReference}
+                              </strong>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-col sm:flex-row items-center justify-end gap-3 pt-2">
+                            <button
+                              type="button"
+                              onClick={() => setPaymentOutcomeStatus(null)}
+                              className="w-full sm:w-auto px-5 py-3 bg-purple-700 hover:bg-purple-800 text-white text-xs font-extrabold rounded-xl cursor-pointer transition"
+                            >
+                              Volver a Intentar el Pago
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPaymentModalType(null);
+                                setIsPaySelectionWindowOpen(false);
+                              }}
+                              className="w-full sm:w-auto px-5 py-3 bg-white hover:bg-rose-50 text-rose-900 border border-rose-300 text-xs font-bold rounded-xl cursor-pointer transition"
+                            >
+                              Cerrar y Volver al Panel
+                            </button>
+                          </div>
                         </div>
-                      </form>
-                    )}
+                      ) : (
+                        <form
+                          onSubmit={handleConfirmPayment}
+                          className="w-full flex-1 bg-white border border-purple-200 rounded-2xl p-4 sm:p-7 lg:p-10 shadow-xs flex flex-col justify-between space-y-6"
+                        >
+                          {/* Si es otro monto, permitir ajustar el valor */}
+                          {paymentModalType === 'CUOTA_PERSONALIZADA' && (
+                            <div className="p-4 rounded-xl bg-purple-50/60 border border-purple-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                              <div>
+                                <label className="block text-xs font-extrabold text-purple-950 uppercase">
+                                  Otro monto que deseas pagar (COP)
+                                </label>
+                                <p className="text-[11px] text-purple-700">
+                                  Saldo restante actual:{' '}
+                                  <strong>{formatMoney(saldoPendiente)}</strong>
+                                </p>
+                              </div>
+                              <div className="relative w-full sm:w-56">
+                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-purple-700 font-bold text-sm">
+                                  $
+                                </span>
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={
+                                    customPaymentAmount && customPaymentAmount > 0
+                                      ? new Intl.NumberFormat('es-CO', {
+                                          maximumFractionDigits: 0
+                                        }).format(customPaymentAmount)
+                                      : ''
+                                  }
+                                  onChange={e => {
+                                    const raw = e.target.value.replace(/\D/g, '');
+                                    const val = raw ? Number(raw) : 0;
+                                    setCustomPaymentAmount(
+                                      saldoPendiente > 0
+                                        ? Math.min(saldoPendiente, Math.max(0, val))
+                                        : val
+                                    );
+                                  }}
+                                  placeholder="0"
+                                  className="w-full pl-7 pr-3 py-2 rounded-xl bg-white border-2 border-purple-400 text-purple-950 font-mono font-extrabold text-sm focus:border-purple-700 focus:outline-none"
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {/* PREGUNTA 1: MEDIO DE PAGO */}
+                          <div className="space-y-3">
+                            <div className="flex items-center gap-2 border-b border-purple-100 pb-2">
+                              <span className="w-6 h-6 rounded-lg bg-purple-700 text-white font-mono text-xs font-extrabold flex items-center justify-center shrink-0">
+                                1
+                              </span>
+                              <label className="text-xs sm:text-sm font-extrabold uppercase tracking-wide text-purple-950">
+                                ¿Por qué medio deseas realizar tu pago?
+                              </label>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                              {EFIPAY_CHANNELS.map(ch => {
+                                const isSelected = efipayChannel === ch.id;
+                                return (
+                                  <button
+                                    key={ch.id}
+                                    type="button"
+                                    onClick={() => {
+                                      setEfipayChannel(ch.id);
+                                      setEfipayError(null);
+                                    }}
+                                    className={`p-3.5 rounded-xl border text-left transition cursor-pointer flex flex-col justify-between gap-1.5 ${
+                                      isSelected
+                                        ? 'bg-purple-900 text-white border-purple-950 shadow-xs'
+                                        : 'bg-white text-purple-950 border-purple-200 hover:border-purple-400'
+                                    }`}
+                                  >
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="text-xs font-extrabold leading-tight">
+                                        {ch.shortName}
+                                      </span>
+                                      <span
+                                        className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded shrink-0 ${
+                                          isSelected
+                                            ? 'bg-purple-700 text-purple-100'
+                                            : 'bg-purple-50 text-purple-800 border border-purple-200'
+                                        }`}
+                                      >
+                                        {ch.badge}
+                                      </span>
+                                    </div>
+                                    <p
+                                      className={`text-[10px] leading-snug ${
+                                        isSelected
+                                          ? 'text-purple-200'
+                                          : 'text-purple-700/80'
+                                      }`}
+                                    >
+                                      {ch.description}
+                                    </p>
+                                  </button>
+                                );
+                              })}
+                            </div>
+
+                            {/* Datos específicos del medio de pago elegido */}
+                            <div className="p-3.5 sm:p-4 bg-[#fcfaff] border border-purple-200 rounded-xl space-y-3">
+                              {efipayChannel === 'EFIPAY_PSE' && (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                  <div>
+                                    <label className="block text-[11px] font-bold text-purple-900 mb-1 flex items-center gap-1.5">
+                                      <Building2 className="w-3.5 h-3.5 text-purple-700" />
+                                      <span>Banco PSE ACH</span>
+                                    </label>
+                                    <select
+                                      value={pseBank}
+                                      onChange={e => setPseBank(e.target.value)}
+                                      className="w-full px-3 py-2 rounded-lg bg-white border border-purple-300 text-xs font-semibold text-purple-950 focus:border-purple-700 focus:outline-none"
+                                    >
+                                      {COLOMBIAN_PSE_BANKS.map(bank => (
+                                        <option key={bank} value={bank}>
+                                          {bank}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+
+                                  <div>
+                                    <label className="block text-[11px] font-bold text-purple-900 mb-1">
+                                      Tipo de Persona Bancaria
+                                    </label>
+                                    <select
+                                      value={psePersonType}
+                                      onChange={e =>
+                                        setPsePersonType(
+                                          e.target.value as
+                                            | 'NATURAL'
+                                            | 'JURIDICA'
+                                        )
+                                      }
+                                      className="w-full px-3 py-2 rounded-lg bg-white border border-purple-300 text-xs font-semibold text-purple-950 focus:border-purple-700 focus:outline-none"
+                                    >
+                                      <option value="NATURAL">
+                                        Persona Natural
+                                      </option>
+                                      <option value="JURIDICA">
+                                        Persona Jurídica / Empresa (NIT)
+                                      </option>
+                                    </select>
+                                  </div>
+                                </div>
+                              )}
+
+                              {efipayChannel === 'EFIPAY_CARD' && (
+                                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                                  <div className="sm:col-span-2">
+                                    <label className="block text-[11px] font-bold text-purple-900 mb-1 flex items-center gap-1.5">
+                                      <CreditCard className="w-3.5 h-3.5 text-purple-700" />
+                                      <span>Número de Tarjeta</span>
+                                    </label>
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      autoComplete="off"
+                                      maxLength={19}
+                                      placeholder="4532 •••• •••• 8492"
+                                      value={cardNumber}
+                                      onChange={e =>
+                                        setCardNumber(
+                                          e.target.value.replace(/[^\d\s]/g, '')
+                                        )
+                                      }
+                                      className="w-full px-3 py-2 rounded-lg bg-white border border-purple-300 text-xs font-mono font-bold text-purple-950 focus:border-purple-700 focus:outline-none"
+                                    />
+                                  </div>
+
+                                  <div>
+                                    <label className="block text-[11px] font-bold text-purple-900 mb-1">
+                                      Vencimiento (MM/AA)
+                                    </label>
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      autoComplete="off"
+                                      maxLength={5}
+                                      placeholder="08/29"
+                                      value={cardExpiry}
+                                      onChange={e => {
+                                        let v = e.target.value.replace(
+                                          /\D/g,
+                                          ''
+                                        );
+                                        if (v.length >= 3) {
+                                          v = `${v.slice(0, 2)}/${v.slice(2, 4)}`;
+                                        }
+                                        setCardExpiry(v);
+                                      }}
+                                      className="w-full px-3 py-2 rounded-lg bg-white border border-purple-300 text-xs font-mono font-bold text-purple-950 focus:border-purple-700 focus:outline-none"
+                                    />
+                                  </div>
+
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <div>
+                                      <label className="block text-[11px] font-bold text-purple-900 mb-1">
+                                        CVV
+                                      </label>
+                                      <input
+                                        type="password"
+                                        inputMode="numeric"
+                                        autoComplete="off"
+                                        maxLength={4}
+                                        placeholder="•••"
+                                        value={cardCvv}
+                                        onChange={e =>
+                                          setCardCvv(
+                                            e.target.value.replace(/\D/g, '')
+                                          )
+                                        }
+                                        className="w-full px-2.5 py-2 rounded-lg bg-white border border-purple-300 text-xs font-mono font-bold text-purple-950 focus:border-purple-700 focus:outline-none"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="block text-[11px] font-bold text-purple-900 mb-1">
+                                        Cuotas
+                                      </label>
+                                      <select
+                                        value={cardInstallments}
+                                        onChange={e =>
+                                          setCardInstallments(
+                                            Number(e.target.value)
+                                          )
+                                        }
+                                        className="w-full px-2 py-2 rounded-lg bg-white border border-purple-300 text-xs font-mono font-bold text-purple-950 focus:border-purple-700 focus:outline-none"
+                                      >
+                                        {[1, 2, 3, 6, 12, 24, 36].map(n => (
+                                          <option key={n} value={n}>
+                                            {n}x
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+
+                              {(efipayChannel === 'EFIPAY_NEQUI' ||
+                                efipayChannel === 'EFIPAY_BANCOLOMBIA') && (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
+                                  <div>
+                                    <label className="block text-[11px] font-bold text-purple-900 mb-1 flex items-center gap-1.5">
+                                      <Smartphone className="w-3.5 h-3.5 text-purple-700" />
+                                      <span>
+                                        {efipayChannel === 'EFIPAY_NEQUI'
+                                          ? 'Número Celular Nequi'
+                                          : 'Celular / Cuenta Bancolombia'}
+                                      </span>
+                                    </label>
+                                    <input
+                                      type="tel"
+                                      maxLength={15}
+                                      placeholder="300 000 0000"
+                                      value={walletPhone}
+                                      onChange={e =>
+                                        setWalletPhone(
+                                          e.target.value.replace(
+                                            /[^\d\s+]/g,
+                                            ''
+                                          )
+                                        )
+                                      }
+                                      className="w-full px-3 py-2 rounded-lg bg-white border border-purple-300 text-xs font-mono font-bold text-purple-950 focus:border-purple-700 focus:outline-none"
+                                    />
+                                  </div>
+                                  <div className="text-[11px] text-purple-800 bg-white p-2.5 rounded-lg border border-purple-200">
+                                    Transacción protegida con cifrado de extremo
+                                    a extremo.
+                                  </div>
+                                </div>
+                              )}
+
+                              {efipayChannel === 'EFIPAY_QR' && (
+                                <div className="flex items-center gap-3 p-2 bg-white rounded-lg border border-purple-200">
+                                  <div className="w-10 h-10 rounded-lg bg-purple-900 text-white flex items-center justify-center shrink-0">
+                                    <QrCode className="w-5 h-5" />
+                                  </div>
+                                  <div className="text-xs text-purple-950">
+                                    <strong>
+                                      Orden QR ({paymentReference})
+                                    </strong>{' '}
+                                    — Liquidación inmediata.
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* PREGUNTAS 2, 3 Y 4: IDENTIFICACIÓN DEL CLIENTE */}
+                          <div className="space-y-4 pt-2">
+                            <div className="flex items-center gap-2 border-b border-purple-100 pb-2">
+                              <span className="w-6 h-6 rounded-lg bg-purple-700 text-white font-mono text-xs font-extrabold flex items-center justify-center shrink-0">
+                                2
+                              </span>
+                              <span className="text-xs sm:text-sm font-extrabold uppercase tracking-wide text-purple-950">
+                                Datos de Identificación del Pagador
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                              {/* Nombre Completo */}
+                              <div className="p-3.5 rounded-xl bg-[#fcfaff] border border-purple-200 space-y-1.5">
+                                <label className="block text-[11px] font-extrabold uppercase text-purple-900 flex items-center gap-1.5">
+                                  <UserCheck className="w-3.5 h-3.5 text-purple-700 shrink-0" />
+                                  <span>Nombre Completo</span>
+                                </label>
+                                <input
+                                  type="text"
+                                  required
+                                  value={payerFullName}
+                                  onChange={e =>
+                                    setPayerFullName(e.target.value)
+                                  }
+                                  placeholder="Ej. Valentina Ríos Gómez"
+                                  className="w-full px-3 py-2 rounded-lg bg-white border border-purple-300 text-xs font-bold text-purple-950 focus:border-purple-700 focus:outline-none"
+                                />
+                              </div>
+
+                              {/* Cédula de Ciudadanía */}
+                              <div className="p-3.5 rounded-xl bg-[#fcfaff] border border-purple-200 space-y-1.5">
+                                <label className="block text-[11px] font-extrabold uppercase text-purple-900 flex items-center gap-1.5">
+                                  <ShieldCheck className="w-3.5 h-3.5 text-purple-700 shrink-0" />
+                                  <span>Cédula de Ciudadanía</span>
+                                </label>
+                                <input
+                                  type="text"
+                                  required
+                                  value={payerCedula}
+                                  onChange={e =>
+                                    setPayerCedula(e.target.value)
+                                  }
+                                  placeholder="Ej. 1020304050"
+                                  className="w-full px-3 py-2 rounded-lg bg-white border border-purple-300 text-xs font-mono font-bold text-purple-950 focus:border-purple-700 focus:outline-none"
+                                />
+                              </div>
+
+                              {/* Correo Electrónico */}
+                              <div className="p-3.5 rounded-xl bg-[#fcfaff] border border-purple-200 space-y-1.5">
+                                <label className="block text-[11px] font-extrabold uppercase text-purple-900 flex items-center gap-1.5">
+                                  <Mail className="w-3.5 h-3.5 text-purple-700 shrink-0" />
+                                  <span>Correo Electrónico</span>
+                                </label>
+                                <input
+                                  type="email"
+                                  required
+                                  value={payerEmail}
+                                  onChange={e => setPayerEmail(e.target.value)}
+                                  placeholder="correo@ejemplo.com"
+                                  className="w-full px-3 py-2 rounded-lg bg-white border border-purple-300 text-xs font-bold text-purple-950 focus:border-purple-700 focus:outline-none"
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          {efipayError && (
+                            <div className="p-3.5 bg-rose-50 border border-rose-300 rounded-xl text-xs font-bold text-rose-800 flex items-center gap-2">
+                              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                              <span>{efipayError}</span>
+                            </div>
+                          )}
+
+                          {/* Botones de Acción */}
+                          <div className="pt-3 border-t border-purple-100 flex flex-col-reverse sm:flex-row items-center justify-between gap-3">
+                            <button
+                              type="button"
+                              disabled={isProcessingPayment}
+                              onClick={handleCancelPaymentGateway}
+                              className="w-full sm:w-auto px-5 py-3 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 text-xs font-extrabold rounded-xl cursor-pointer transition flex items-center justify-center gap-1.5"
+                            >
+                              <XCircle className="w-4 h-4 shrink-0" />
+                              <span>Cancelar Pago</span>
+                            </button>
+
+                            <button
+                              type="submit"
+                              disabled={isProcessingPayment}
+                              className="w-full sm:w-auto px-6 py-3.5 bg-purple-700 hover:bg-purple-800 text-white text-xs sm:text-sm font-extrabold rounded-xl border border-purple-900 cursor-pointer flex items-center justify-center gap-2 shadow-xs transition"
+                            >
+                              <Lock className="w-4 h-4 shrink-0" />
+                              <span>
+                                {isProcessingPayment
+                                  ? 'Procesando pago...'
+                                  : `Confirmar y Pagar (${formatDotCurrency(
+                                      paymentModalType === 'CREDITO_COMPLETO'
+                                        ? saldoPendiente
+                                        : paymentModalType ===
+                                          'CUOTA_PERSONALIZADA'
+                                        ? customPaymentAmount
+                                        : valorCuotaCard
+                                    )})`}
+                              </span>
+                              <ArrowRight className="w-4 h-4 shrink-0" />
+                            </button>
+                          </div>
+                        </form>
+                      )}
+                    </div>
                   </div>
                 )}
-              </div>
+              </>
             )}
           </>
         )}

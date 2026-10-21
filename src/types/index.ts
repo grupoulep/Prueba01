@@ -76,6 +76,19 @@ export interface LoanGeneralSettings {
   updatedBy: string;
 }
 
+export interface ClientPaymentRecord {
+  paymentNumber: string;
+  transactionId: string;
+  authorizationCode: string;
+  amount: number;
+  paymentMethod: string;
+  payerFullName: string;
+  payerCedula: string;
+  payerEmail: string;
+  status: 'PAGO_PROCESADO' | 'PAGO_CANCELADO';
+  paidAt: string;
+}
+
 export interface User {
   id: string;
   cedula: string;
@@ -104,6 +117,12 @@ export interface User {
   interestRateApplied?: number;
   previousLoans?: PreviousLoanRecord[];
   disbursementRequest?: DisbursementRequest;
+  lastPaymentNumber?: string;
+  lastPaymentStatus?: 'PAGO_PROCESADO' | 'PAGO_CANCELADO';
+  lastPaymentAmount?: number;
+  lastPaymentMethod?: string;
+  lastPaymentDate?: string;
+  paymentRecords?: ClientPaymentRecord[];
   acceptedPrivacyPolicy: boolean;
   acceptedPrivacyDate: string;
   failedLoginAttempts: number;

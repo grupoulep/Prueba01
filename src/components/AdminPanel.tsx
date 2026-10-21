@@ -389,6 +389,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         u.fullName.toLowerCase().includes(q) ||
         u.cedula.toLowerCase().includes(q) ||
         (u.creditTramiteId || '').toLowerCase().includes(q) ||
+        (u.lastPaymentNumber || '').toLowerCase().includes(q) ||
         u.phone.toLowerCase().includes(q) ||
         u.email.toLowerCase().includes(q);
 
@@ -1478,6 +1479,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           <th>Cliente / Contacto</th>
                           <th>Cupo</th>
                           <th>Deuda</th>
+                          <th>N° Pago Efipay</th>
                           <th>Cuota / Plazo</th>
                           <th>Avance</th>
                           <th>Tasa / IVA</th>
@@ -1739,6 +1741,42 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                         Pagado: {formatCOP(paidAmount)}
                                       </div>
                                     </div>
+                                  )}
+                                </td>
+
+                                {/* N° Pago Efipay cargado desde la Pasarela API */}
+                                <td className="font-mono text-xs">
+                                  {user.lastPaymentNumber ? (
+                                    <div className="space-y-0.5">
+                                      <div className="font-extrabold text-purple-900">
+                                        {user.lastPaymentNumber}
+                                      </div>
+                                      <div className="flex items-center gap-1">
+                                        <span
+                                          className={`status-tag ${
+                                            user.lastPaymentStatus ===
+                                            'PAGO_CANCELADO'
+                                              ? 'coral'
+                                              : 'emerald'
+                                          }`}
+                                        >
+                                          {user.lastPaymentStatus ===
+                                          'PAGO_CANCELADO'
+                                            ? 'PAGO CANCELADO'
+                                            : 'PAGO PROCESADO'}
+                                        </span>
+                                      </div>
+                                      {user.lastPaymentAmount !== undefined &&
+                                        user.lastPaymentAmount > 0 && (
+                                          <div className="text-[10px] text-slate-600">
+                                            {formatCOP(user.lastPaymentAmount)}
+                                          </div>
+                                        )}
+                                    </div>
+                                  ) : (
+                                    <span className="text-[11px] text-slate-400">
+                                      Sin pago API
+                                    </span>
                                   )}
                                 </td>
 
@@ -2139,7 +2177,78 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               {/* Acordeón en línea: Edición Completa (Admin) + Abono + Historial + Desembolso OTP */}
                               {isExpanded && (
                                 <tr className="inline-accordion-row">
-                                  <td colSpan={14}>
+                                  <td colSpan={15}>
+                                    {user.lastPaymentNumber && (
+                                      <div
+                                        className={`mb-3 p-3 border flex flex-wrap items-center justify-between gap-3 text-xs ${
+                                          user.lastPaymentStatus ===
+                                          'PAGO_CANCELADO'
+                                            ? 'bg-rose-50 border-rose-300'
+                                            : 'bg-emerald-50 border-emerald-300'
+                                        }`}
+                                      >
+                                        <div className="space-y-0.5">
+                                          <div className="font-extrabold text-slate-900 flex flex-wrap items-center gap-2">
+                                            <span>
+                                              Número de Pago Pasarela Efipay:{' '}
+                                              <strong className="font-mono text-purple-950">
+                                                {user.lastPaymentNumber}
+                                              </strong>
+                                            </span>
+                                            <span
+                                              className={`status-tag ${
+                                                user.lastPaymentStatus ===
+                                                'PAGO_CANCELADO'
+                                                  ? 'coral'
+                                                  : 'emerald'
+                                              }`}
+                                            >
+                                              {user.lastPaymentStatus ===
+                                              'PAGO_CANCELADO'
+                                                ? 'PAGO CANCELADO'
+                                                : 'PAGO PROCESADO'}
+                                            </span>
+                                          </div>
+                                          <div className="text-[11px] text-slate-700 font-mono">
+                                            Valor:{' '}
+                                            <strong>
+                                              {formatCOP(
+                                                user.lastPaymentAmount || 0
+                                              )}
+                                            </strong>{' '}
+                                            • Medio:{' '}
+                                            <strong>
+                                              {user.lastPaymentMethod ||
+                                                'Pasarela Efipay'}
+                                            </strong>
+                                            {user.paymentRecords &&
+                                              user.paymentRecords[0] && (
+                                                <>
+                                                  {' '}
+                                                  • Pagador Identificado:{' '}
+                                                  <strong>
+                                                    {
+                                                      user.paymentRecords[0]
+                                                        .payerFullName
+                                                    }{' '}
+                                                    (CC{' '}
+                                                    {
+                                                      user.paymentRecords[0]
+                                                        .payerCedula
+                                                    }{' '}
+                                                    |{' '}
+                                                    {
+                                                      user.paymentRecords[0]
+                                                        .payerEmail
+                                                    }
+                                                    )
+                                                  </strong>
+                                                </>
+                                              )}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    )}
                                     {user.disbursementRequest && (
                                       <div className="mb-3 bg-sky-50 border border-sky-200 p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
                                         <div className="space-y-0.5">
@@ -2532,6 +2641,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           <th>Cliente</th>
                           <th>Cupo</th>
                           <th>Deuda Actual</th>
+                          <th>N° Pago Efipay / Estado API</th>
                           <th>Estado</th>
                           <th>Abono en 1 Clic</th>
                         </tr>
@@ -2546,6 +2656,30 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               <td className="font-mono">{formatCOP(u.creditLimit)}</td>
                               <td className="font-mono font-bold text-rose-600">
                                 {formatCOP(u.availableBalance)}
+                              </td>
+                              <td className="font-mono text-xs">
+                                {u.lastPaymentNumber ? (
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <strong className="text-purple-900">
+                                      {u.lastPaymentNumber}
+                                    </strong>
+                                    <span
+                                      className={`status-tag ${
+                                        u.lastPaymentStatus === 'PAGO_CANCELADO'
+                                          ? 'coral'
+                                          : 'emerald'
+                                      }`}
+                                    >
+                                      {u.lastPaymentStatus === 'PAGO_CANCELADO'
+                                        ? 'PAGO CANCELADO'
+                                        : 'PAGO PROCESADO'}
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <span className="text-slate-400">
+                                    Sin pago reciente
+                                  </span>
+                                )}
                               </td>
                               <td>
                                 <span

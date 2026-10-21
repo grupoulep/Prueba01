@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldCheck, LogOut, Clock } from 'lucide-react';
 import { User } from '../types';
+import { HelpPanelModal } from './HelpPanelModal';
 
 interface NavbarProps {
   currentUser: User | null;
@@ -18,7 +18,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSwitchView
 }) => {
   const [sessionSeconds, setSessionSeconds] = useState<number>(300);
+  const [isHelpOpen, setIsHelpOpen] = useState<boolean>(false);
   const onLogoutRef = React.useRef(onLogout);
+
   useEffect(() => {
     onLogoutRef.current = onLogout;
   }, [onLogout]);
@@ -48,73 +50,54 @@ export const Navbar: React.FC<NavbarProps> = ({
     }
   }, [currentUser, sessionSeconds]);
 
-  const formatTime = (secs: number) => {
-    const mins = Math.floor(secs / 60);
-    const remSecs = secs % 60;
-    return `${mins}:${remSecs.toString().padStart(2, '0')}`;
-  };
-
   if (!currentUser) {
     return null;
   }
 
+  const firstName = currentUser?.fullName
+    ? currentUser.fullName.trim().split(/\s+/)[0]
+    : 'Usuario';
+
   return (
-    <header className="sticky top-0 z-40 bg-purple-900 border-b border-purple-800 text-purple-100 shadow-md">
-      <div className="max-w-6xl mx-auto px-3 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-2">
-        {/* Brand */}
-        <div className="flex items-center min-w-0">
-          <img
-            src={`${import.meta.env.BASE_URL}assets/aistudio/logo-bordered.png`}
-            alt="Logo"
-            className="h-5 sm:h-6 w-auto object-contain select-none shrink-0"
-          />
-        </div>
+    <>
+      <header className="relative w-full bg-[#fcfaff] border-b border-purple-100/80">
+        <div className="max-w-6xl mx-auto px-3 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-2">
+          {/* Logo sin bordes ni burbujas sobre fondo claro con saludo ¡Hola <nombre>! en morado */}
+          <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0">
+            <img
+              src={`${import.meta.env.BASE_URL}assets/aistudio/52878_14fa00e9.png`}
+              alt="Logo"
+              className="h-5 sm:h-6 w-auto object-contain select-none shrink-0"
+            />
+            <span className="text-xs sm:text-sm font-extrabold text-purple-900 truncate tracking-tight">
+              ¡Hola {firstName}!
+            </span>
+          </div>
 
-        {/* Right Section */}
-        <div className="flex items-center space-x-2 sm:space-x-3 shrink-0">
-          {currentUser ? (
-            <>
-              <div 
-                className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1 rounded bg-purple-950/90 border border-purple-700/80 text-[11px] sm:text-xs text-purple-100 shadow-xs"
-                title="Sesión segura"
-              >
-                <Clock className="w-3.5 h-3.5 text-purple-300 shrink-0" />
-                <span className="hidden sm:inline text-purple-300 font-medium">Sesión:</span>
-                <span className="font-mono font-bold text-white">{formatTime(sessionSeconds)}</span>
-              </div>
-
-              <button
-                type="button"
-                onClick={onLogout}
-                className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold text-rose-700 hover:text-rose-900 bg-white hover:bg-rose-50 border border-rose-200 rounded-md transition cursor-pointer shadow-xs"
-              >
-                <LogOut className="w-3.5 h-3.5 shrink-0" />
-                <span>Salir</span>
-              </button>
-            </>
-          ) : (
-            <div className="flex items-center gap-2">
-              {activeView === 'LOGIN' ? (
-                <button
-                  type="button"
-                  onClick={() => onSwitchView('REGISTER')}
-                  className="px-4 py-2 text-xs font-bold text-purple-950 bg-white hover:bg-purple-100 border border-white rounded-md shadow-xs transition cursor-pointer"
-                >
-                  Crear usuario
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => onSwitchView('LOGIN')}
-                  className="px-4 py-2 text-xs font-bold text-purple-900 bg-white hover:bg-purple-100 rounded-md shadow-xs border border-white transition cursor-pointer"
-                >
-                  Iniciar Sesión
-                </button>
-              )}
-            </div>
-          )}
+          {/* Lado derecho: Signo de interrogación dentro de un círculo de color gris pequeño sin letras y sin nada de más */}
+          <div className="flex items-center shrink-0">
+            <button
+              type="button"
+              onClick={() => setIsHelpOpen(true)}
+              aria-label="Panel de Ayuda"
+              title="Panel de Ayuda"
+              className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gray-200 hover:bg-gray-300 active:scale-95 text-gray-800 text-xs sm:text-sm font-extrabold flex items-center justify-center transition cursor-pointer shadow-2xs border border-gray-300 focus:outline-none"
+            >
+              <span className="leading-none select-none">?</span>
+            </button>
+          </div>
         </div>
-      </div>
-    </header>
+      </header>
+
+      {/* Panel de Ayuda Modal */}
+      <HelpPanelModal
+        isOpen={isHelpOpen}
+        onClose={() => setIsHelpOpen(false)}
+        currentUser={currentUser}
+        onLogout={onLogout}
+        onOpenPrivacyModal={onOpenPrivacyModal}
+      />
+    </>
   );
 };
+
