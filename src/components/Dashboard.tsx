@@ -25,7 +25,9 @@ import {
   Mail,
   ChevronDown,
   ChevronUp,
-  X
+  X,
+  Home,
+  Activity
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { StorageService } from '../services/storageService';
@@ -57,6 +59,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [isPanelEntering, setIsPanelEntering] = useState<boolean>(true);
   const [hideBalance, setHideBalance] = useState<boolean>(false);
   const [integrityValid, setIntegrityValid] = useState<boolean>(true);
+
+  // Pestaña activa de la barra inferior fija ("Inicio" | "Actividad")
+  const [activeBottomSection, setActiveBottomSection] = useState<
+    'INICIO' | 'ACTIVIDAD'
+  >('INICIO');
 
   // Estado para pago en línea (Ventana a pantalla completa "¿Cuánto deseas pagar?" y flujo de pago)
   const [isPaySelectionWindowOpen, setIsPaySelectionWindowOpen] =
@@ -680,6 +687,176 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   const previousLoans = user.previousLoans || [];
 
+  // Formato con coma para miles como "+ 458,548"
+  const formatCommaNumber = (val: number) => {
+    return new Intl.NumberFormat('en-US', {
+      maximumFractionDigits: 0
+    }).format(Math.round(val));
+  };
+
+  // Construcción de la lista de movimientos de Actividad (Pagos, Retiros y Movimientos)
+  const activityMovements = useMemo(() => {
+    const items: Array<{
+      id: string;
+      type: 'Pago' | 'Retiro';
+      description: string;
+      dateText: string;
+      timeText: string;
+      amount: number;
+      increasesCupo: boolean;
+      timestamp: number;
+    }> = [];
+
+    const parseDateTime = (rawDate?: string, fallbackTime = '10:30 a. m.') => {
+      if (!rawDate) {
+        return {
+          dateText: '16 oct 2026',
+          timeText: fallbackTime,
+          timestamp: new Date(2026, 9, 16, 10, 30).getTime()
+        };
+      }
+      if (/^\d{4}-\d{2}-\d{2}$/.test(rawDate.trim())) {
+        const [y, m, d] = rawDate.trim().split('-').map(Number);
+        const dt = new Date(y, m - 1, d, 10, 30);
+        return {
+          dateText: dt.toLocaleDateString('es-CO', {
+            day: '2-digit',
+            month: 'short',
+            year: 'numeric'
+          }),
+          timeText: fallbackTime,
+          timestamp: dt.getTime()
+        };
+      }
+      const parsed = new Date(rawDate);
+      if (!Number.isNaN(parsed.getTime())) {
+        return {
+          dateText: parsed.toLocaleDateString('es-CO', {
+            day: '2-digit',
+            month: 'short',
+            year: 'numeric'
+          }),
+          timeText: parsed.toLocaleTimeString('es-CO', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true
+          }),
+          timestamp: parsed.getTime()
+        };
+      }
+      return {
+        dateText: rawDate,
+        timeText: fallbackTime,
+        timestamp: Date.now()
+      };
+    };
+
+    // 1. Pagos registrados en paymentRecords
+    const records = user.paymentRecords || [];
+    let totalRecordedPaid = 0;
+    records.forEach((rec, idx) => {
+      if (rec.status === 'PAGO_PROCESADO') {
+        totalRecordedPaid += rec.amount;
+        const { dateText, timeText, timestamp } = parseDateTime(
+          rec.paidAt,
+          '02:15 p. m.'
+        );
+        items.push({
+          id: `pay-rec-${rec.paymentNumber || idx}`,
+          type: 'Pago',
+          description: `Pago de cuota (${rec.paymentMethod || 'En línea'})`,
+          dateText,
+          timeText,
+          amount: rec.amount,
+          increasesCupo: true,
+          timestamp
+        });
+      }
+    });
+
+    // 2. Si el crédito activo ya tiene abonos previos (montoPrestado > saldoPendiente) que liberaron cupo
+    const abonoPrevio = Math.max(
+      0,
+      montoPrestado - saldoPendiente - totalRecordedPaid
+    );
+    if (isLoanAssigned && abonoPrevio > 0) {
+      const { dateText, timeText, timestamp } = parseDateTime(
+        user.lastPaymentDate || user.creditAssignedDate,
+        '04:20 p. m.'
+      );
+      items.push({
+        id: 'pay-abono-previo',
+        type: 'Pago',
+        description: 'Pago aplicado a obligación vigente',
+        dateText,
+        timeText,
+        amount: abonoPrevio,
+        increasesCupo: true,
+        timestamp: timestamp + 1000
+      });
+    }
+
+    // 3. Retiro / Desembolso del crédito actual
+    if (isLoanAssigned && montoPrestado > 0) {
+      const { dateText, timeText, timestamp } = parseDateTime(
+        user.disbursementRequest?.signedAt || user.creditAssignedDate,
+        '09:45 a. m.'
+      );
+      items.push({
+        id: `retiro-actual-${user.creditTramiteId}`,
+        type: 'Retiro',
+        description: `Retiro de crédito (${user.creditTramiteId})`,
+        dateText,
+        timeText,
+        amount: montoPrestado,
+        increasesCupo: false,
+        timestamp
+      });
+    }
+
+    // 4. Movimientos de créditos anteriores (Retiro al inicio y Pago al cierre que aumentó el cupo)
+    previousLoans.forEach((prev, idx) => {
+      if (prev.closedDate) {
+        const closeInfo = parseDateTime(prev.closedDate, '03:40 p. m.');
+        items.push({
+          id: `prev-pago-${prev.id || idx}`,
+          type: 'Pago',
+          description: `Pago total crédito (${prev.tramiteId})`,
+          dateText: closeInfo.dateText,
+          timeText: closeInfo.timeText,
+          amount: prev.totalPaid || prev.amountGranted,
+          increasesCupo: true,
+          timestamp: closeInfo.timestamp
+        });
+      }
+      if (prev.startDate) {
+        const startInfo = parseDateTime(prev.startDate, '11:10 a. m.');
+        items.push({
+          id: `prev-retiro-${prev.id || idx}`,
+          type: 'Retiro',
+          description: `Retiro desembolsado (${prev.tramiteId})`,
+          dateText: startInfo.dateText,
+          timeText: startInfo.timeText,
+          amount: prev.amountGranted,
+          increasesCupo: false,
+          timestamp: startInfo.timestamp
+        });
+      }
+    });
+
+    return items.sort((a, b) => b.timestamp - a.timestamp);
+  }, [
+    user.paymentRecords,
+    user.lastPaymentDate,
+    user.creditAssignedDate,
+    user.disbursementRequest,
+    user.creditTramiteId,
+    isLoanAssigned,
+    montoPrestado,
+    saldoPendiente,
+    previousLoans
+  ]);
+
   if (isPanelEntering) {
     return (
       <div className="w-full min-h-[65vh] bg-[#fcfaff] flex flex-col items-center justify-center p-6 animate-fadeIn">
@@ -732,16 +909,76 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       {/* Main Content: Se expande a toda la pantalla cuando el cliente terminó su crédito y solicita otro */}
       <main
-        className={`flex-1 w-full mx-auto ${
-          isPaidOff
+        className={`flex-1 w-full mx-auto pb-28 ${
+          isPaidOff && activeBottomSection === 'INICIO'
             ? 'max-w-6xl px-4 sm:px-8 py-6 flex flex-col justify-between'
             : 'max-w-3xl px-4 sm:px-6 py-6 sm:py-10 space-y-8'
         }`}
       >
-        {/* =========================================================================
-            CASO A: CLIENTE EN VALIDACIÓN INICIAL (PENDIENTE / SIN ACEPTAR)
-           ========================================================================= */}
-        {!isLoanAssigned ? (
+        {activeBottomSection === 'ACTIVIDAD' ? (
+          /* =========================================================================
+             PANEL DE ACTIVIDAD: PAGOS, RETIROS Y MOVIMIENTOS (UNO DEBAJO DE OTRO)
+             ========================================================================= */
+          <div className="space-y-4 animate-fadeIn">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg sm:text-xl font-extrabold text-black tracking-tight">
+                Actividad
+              </h2>
+              <span className="text-xs font-semibold text-gray-500">
+                Pagos, retiros y movimientos
+              </span>
+            </div>
+
+            {activityMovements.length === 0 ? (
+              <div className="bg-white rounded-2xl p-6 shadow-xs border border-gray-100 text-center text-xs sm:text-sm text-gray-500">
+                Aún no registras movimientos de pagos o retiros.
+              </div>
+            ) : (
+              <div className="flex flex-col space-y-3">
+                {activityMovements.map(mov => (
+                  <div
+                    key={mov.id}
+                    className="bg-white rounded-2xl p-4 sm:p-5 shadow-xs border border-gray-100 flex items-center justify-between gap-4"
+                  >
+                    <div className="flex flex-col space-y-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`inline-flex items-center px-2.5 py-0.5 rounded-lg text-xs font-bold ${
+                            mov.type === 'Pago'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-purple-100 text-purple-800'
+                          }`}
+                        >
+                          {mov.type}
+                        </span>
+                        <span className="text-xs sm:text-sm font-bold text-gray-900 truncate">
+                          {mov.description}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 text-[11px] sm:text-xs text-gray-500">
+                        <span>{mov.dateText}</span>
+                        <span>•</span>
+                        <span>{mov.timeText}</span>
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      {mov.increasesCupo ? (
+                        <span className="text-sm sm:text-base font-extrabold text-emerald-600 font-mono">
+                          + {formatCommaNumber(mov.amount)}
+                        </span>
+                      ) : (
+                        <span className="text-sm sm:text-base font-extrabold text-gray-800 font-mono">
+                          {formatCommaNumber(mov.amount)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : !isLoanAssigned ? (
           <div className="py-10 text-center space-y-5 animate-fadeIn">
             <div className="relative w-16 h-16 mx-auto rounded bg-purple-100/80 flex items-center justify-center text-purple-700">
               <Clock className="w-8 h-8" />
@@ -1722,52 +1959,99 @@ export const Dashboard: React.FC<DashboardProps> = ({
         {/* =========================================================================
             4. REGISTRO DE CRÉDITOS ANTERIORES (OCULTO MIENTRAS ESTÁ EN EL WIZARD A PANTALLA COMPLETA)
            ========================================================================= */}
-        {!isPaidOff && previousLoans.length > 0 && (
-          <div className="pt-2 space-y-3 animate-fadeIn">
-            <div className="flex items-center gap-2.5 pb-2.5 border-b border-purple-300/80">
-              <History className="w-4 h-4 text-purple-700 shrink-0" />
-              <h2 className="text-xs sm:text-base font-extrabold text-purple-950 tracking-tight uppercase">
-                Registro de Créditos Anteriores
-              </h2>
-              <div className="flex-1 h-px bg-purple-200/70 ml-2" />
-            </div>
+        {activeBottomSection === 'INICIO' &&
+          !isPaidOff &&
+          previousLoans.length > 0 && (
+            <div className="pt-2 space-y-3 animate-fadeIn">
+              <div className="flex items-center gap-2.5 pb-2.5 border-b border-purple-300/80">
+                <History className="w-4 h-4 text-purple-700 shrink-0" />
+                <h2 className="text-xs sm:text-base font-extrabold text-purple-950 tracking-tight uppercase">
+                  Registro de Créditos Anteriores
+                </h2>
+                <div className="flex-1 h-px bg-purple-200/70 ml-2" />
+              </div>
 
-            <div className="divide-y divide-purple-200/90 border-b border-purple-200/90">
-              {previousLoans.map(prev => (
-                <div
-                  key={prev.id}
-                  className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="w-4 h-0.5 bg-purple-400 shrink-0" />
-                    <div>
+              <div className="divide-y divide-purple-200/90 border-b border-purple-200/90">
+                {previousLoans.map(prev => (
+                  <div
+                    key={prev.id}
+                    className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="w-4 h-0.5 bg-purple-400 shrink-0" />
+                      <div>
+                        <span className="text-[10px] text-purple-600 font-semibold uppercase block">
+                          Monto Otorgado ({prev.tramiteId})
+                        </span>
+                        <span className="font-mono font-extrabold text-purple-950 text-base sm:text-lg">
+                          {hideBalance
+                            ? '••••••••'
+                            : formatMoney(prev.amountGranted)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="hidden sm:block flex-1 max-w-28 border-t border-dashed border-purple-300/80 mx-4" />
+
+                    <div className="pl-7 sm:pl-0 sm:text-right">
                       <span className="text-[10px] text-purple-600 font-semibold uppercase block">
-                        Monto Otorgado ({prev.tramiteId})
+                        Fecha Finalización ({prev.finalStatus})
                       </span>
-                      <span className="font-mono font-extrabold text-purple-950 text-base sm:text-lg">
-                        {hideBalance
-                          ? '••••••••'
-                          : formatMoney(prev.amountGranted)}
+                      <span className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-mono font-bold text-purple-900">
+                        <Calendar className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                        <span>{prev.closedDate || prev.startDate}</span>
                       </span>
                     </div>
                   </div>
-
-                  <div className="hidden sm:block flex-1 max-w-28 border-t border-dashed border-purple-300/80 mx-4" />
-
-                  <div className="pl-7 sm:pl-0 sm:text-right">
-                    <span className="text-[10px] text-purple-600 font-semibold uppercase block">
-                      Fecha Finalización ({prev.finalStatus})
-                    </span>
-                    <span className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-mono font-bold text-purple-900">
-                      <Calendar className="w-3.5 h-3.5 text-purple-600 shrink-0" />
-                      <span>{prev.closedDate || prev.startDate}</span>
-                    </span>
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
-        )}
+          )}
+
+        {/* =========================================================================
+            RECTÁNGULO CON BORDES REDONDOS FIJO EN LA PARTE INFERIOR (INICIO Y ACTIVIDAD)
+           ========================================================================= */}
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-[calc(100%-2rem)] max-w-sm bg-white border border-gray-200 shadow-lg rounded-2xl px-6 py-2.5 flex items-center justify-around">
+          {/* 1. Icono con una casa y debajo "Inicio" */}
+          <button
+            type="button"
+            onClick={() => {
+              setActiveBottomSection('INICIO');
+              setIsPaySelectionWindowOpen(false);
+              setPaymentModalType(null);
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            className={`flex flex-col items-center justify-center gap-1 px-4 py-1 rounded-xl transition cursor-pointer ${
+              activeBottomSection === 'INICIO'
+                ? 'text-purple-700 font-bold'
+                : 'text-gray-500 hover:text-gray-900 font-medium'
+            }`}
+          >
+            <Home className="w-5 h-5" />
+            <span className="text-[11px] sm:text-xs leading-none">Inicio</span>
+          </button>
+
+          {/* 2. Icono de "Actividad" (pagos, retiros y movimientos) */}
+          <button
+            type="button"
+            onClick={() => {
+              setActiveBottomSection('ACTIVIDAD');
+              setIsPaySelectionWindowOpen(false);
+              setPaymentModalType(null);
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            className={`flex flex-col items-center justify-center gap-1 px-4 py-1 rounded-xl transition cursor-pointer ${
+              activeBottomSection === 'ACTIVIDAD'
+                ? 'text-purple-700 font-bold'
+                : 'text-gray-500 hover:text-gray-900 font-medium'
+            }`}
+          >
+            <Activity className="w-5 h-5" />
+            <span className="text-[11px] sm:text-xs leading-none">
+              Actividad
+            </span>
+          </button>
+        </div>
       </main>
     </div>
   );
