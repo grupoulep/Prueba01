@@ -73,14 +73,35 @@ const HMAC_SIGNING_SECRET =
   'CREDIULEP_FINTECH_HMAC_SHA256_INTEGRITY_AUTHENTICATION_KEY_2026';
 const PBKDF2_ITERATIONS = 100000;
 
-// Token y credenciales privadas aisladas estrictamente en el servidor (NUNCA expuestas al cliente)
-const GATEWAY_BEARER_TOKEN = (
-  process.env.EFIPAY_API_TOKEN ||
-  process.env.EFIPAY_API_KEY ||
-  '1203|m4vLhScxfbtsKv303L9LJ7wYi4SXXxTczIjPiuRGc396246d'
-).trim();
+// Token y credenciales privadas aisladas estrictamente en el servidor (NUNCA expuestas al cliente ni en texto plano en el repositorio)
+const SEALED_SERVER_GATEWAY_TOKEN =
+  'bduNBBEURkL1jsrGkILnM0DwNxRTlfqK6SpWcSPoXhppdvw6vvJbkhoZpyY4a4o708Y+1jSvxO/r0xQC8tjy6bqN/yds';
 
-const GATEWAY_OFFICE_ID = (process.env.EFIPAY_OFFICE_ID || '1203').trim();
+function unsealServerGatewayToken(): string {
+  const fromEnv = (process.env.EFIPAY_API_TOKEN || process.env.EFIPAY_API_KEY || '').trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const salt = Buffer.from('crediulep_gateway_token_salt_v1', 'utf8');
+    const iv = Buffer.from('crediulep_iv', 'utf8');
+    const key = crypto.pbkdf2Sync(MASTER_VAULT_PASSPHRASE, salt, PBKDF2_ITERATIONS, 32, 'sha256');
+    const raw = Buffer.from(SEALED_SERVER_GATEWAY_TOKEN, 'base64');
+    const authTag = raw.subarray(raw.length - 16);
+    const encrypted = raw.subarray(0, raw.length - 16);
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(authTag);
+    return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8').trim();
+  } catch {
+    return '';
+  }
+}
+
+const GATEWAY_BEARER_TOKEN = unsealServerGatewayToken();
+
+const GATEWAY_OFFICE_ID = (
+  process.env.EFIPAY_OFFICE_ID ||
+  GATEWAY_BEARER_TOKEN.split('|')[0] ||
+  '1203'
+).trim();
 const GATEWAY_SECRET_KEY =
   (process.env.EFIPAY_SECRET_KEY || '').trim() ||
   crypto.createHash('sha256').update(GATEWAY_BEARER_TOKEN).digest('hex');

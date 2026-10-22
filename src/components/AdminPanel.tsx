@@ -1837,7 +1837,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           <th>Cliente / Contacto</th>
                           <th>Cupo</th>
                           <th>Deuda</th>
-                          <th>N° Pago Efipay</th>
+                          <th>N° Comprobante Pago</th>
                           <th>Cuota / Plazo</th>
                           <th>Avance</th>
                           <th>Tasa / IVA</th>
@@ -2128,7 +2128,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                   )}
                                 </td>
 
-                                {/* N° Pago Efipay cargado desde la Pasarela API */}
+                                {/* N° Comprobante de Pago cargado desde la Pasarela API */}
                                 <td className="font-mono text-xs">
                                   {user.lastPaymentNumber ? (
                                     <div className="space-y-0.5">

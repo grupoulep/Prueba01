@@ -4,9 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CrediULEP - Portal Financiero Seguro</title>
-    <meta name="description" content="Plataforma financiera segura con autenticación 2FA por cédula, consulta de crédito disponible, protección de datos y notificaciones push." />
+    <meta name="description" content="Plataforma financiera segura con autenticación 2FA por cédula, consulta de crédito disponible y protección criptográfica de datos." />
     <meta property="og:title" content="CrediULEP - Portal Financiero Seguro" />
-    <meta property="og:description" content="Plataforma financiera segura con autenticación 2FA por cédula, consulta de crédito disponible, protección de datos y notificaciones push." />
+    <meta property="og:description" content="Plataforma financiera segura con autenticación 2FA por cédula, consulta de crédito disponible y protección criptográfica de datos." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="icon" type="image/png" href="assets/aistudio/52878_14fa00e9.png" />
@@ -15,9 +15,10 @@
     <link href="https://fonts.googleapis.com/css2?family=Roboto+Condensed:ital,wght@0,100..900;1,100..900&family=Roboto+Mono:ital,wght@0,100..700;1,100..700&family=Roboto+Serif:ital,opsz,wght@0,8..144,100..900;1,8..144,100..900&family=Roboto:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet" />
     <script>
       // Detección automática inteligente para GitHub Pages:
-      // Si la página se publicó desde la raíz (/) y el bundle no compilado no pudo ejecutarse,
-      // redirige automáticamente a la carpeta compilada /docs/ sin pantalla en blanco.
+      // Solo redirige a /docs/ si se está sirviendo el index.html fuente sin compilar (/src/main.tsx).
       window.addEventListener('DOMContentLoaded', function() {
+        var isUncompiledSource = !!document.querySelector('script[src="/src/main.tsx"]');
+        if (!isUncompiledSource) return;
         setTimeout(function() {
           var root = document.getElementById('root');
           var isGitHub = window.location.hostname.includes('github.io');
@@ -26,7 +27,7 @@
             var repo = path.endsWith('/') ? path : path + '/';
             window.location.replace(repo + 'docs/' + window.location.search + window.location.hash);
           }
-        }, 300);
+        }, 400);
       });
     </script>
   </head>

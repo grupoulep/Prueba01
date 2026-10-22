@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { KeyRound, ShieldAlert, CheckCircle2, ArrowRight, X, Lock, Eye, EyeOff } from 'lucide-react';
 import { StorageService } from '../services/storageService';
 import { generateSecureOTP } from '../services/cryptoService';
-import { notificationService } from '../services/notificationService';
 import { FirebaseService, formatE164PhoneNumber } from '../services/firebaseService';
 
 interface PasswordRecoveryModalProps {
@@ -50,12 +49,6 @@ export const PasswordRecoveryModal: React.FC<PasswordRecoveryModalProps> = ({
     setStep('OTP');
 
     const targetPhone = user.phone ? formatE164PhoneNumber(user.phone) : '';
-    notificationService.sendPush({
-      title: `Código de Recuperación Enviado${targetPhone ? ` (${targetPhone})` : ''}`,
-      message: `Su código OTP de verificación CrediULEP es: ${otp}`,
-      type: 'login_2fa'
-    });
-
     if (targetPhone) {
       FirebaseService.requestPhoneNumberVerification(targetPhone, otp).catch(() => {});
     }

@@ -192,15 +192,6 @@ export interface LegalSignatureRecord {
   acceptedPolicies: PolicyAgreements;
 }
 
-export interface PushNotificationItem {
-  id: string;
-  title: string;
-  message: string;
-  timestamp: string;
-  read: boolean;
-  type: 'credit_assigned' | 'credit_pending' | 'security_alert' | 'login_2fa';
-}
-
 export interface AuditBlock {
   index: number;
   timestamp: string;

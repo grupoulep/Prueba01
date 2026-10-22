@@ -21,7 +21,6 @@ import {
 } from 'lucide-react';
 import { CreditStatus, LegalSignatureRecord } from '../types';
 import { generateSecureOTP, sha256 } from '../services/cryptoService';
-import { notificationService } from '../services/notificationService';
 import {
   FirebaseService,
   FIREBASE_PHONE_VERIFICATION_TOKEN,

@@ -15,7 +15,6 @@ import {
   Lock
 } from 'lucide-react';
 import { StorageService } from '../services/storageService';
-import { notificationService } from '../services/notificationService';
 import { fintechPanelsEngine } from '../fintech-panels.js';
 
 export type LoanRequestStep = 1 | 2 | 3 | 4 | 5;

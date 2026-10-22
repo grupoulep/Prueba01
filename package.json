@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "start": "tsx server.ts",
-    "build": "vite build",
+    "build": "vite build && vite build --outDir docs && cp docs/index.html docs/404.html && touch docs/.nojekyll",
     "build:github": "vite build --outDir docs && cp docs/index.html docs/404.html && touch docs/.nojekyll",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",

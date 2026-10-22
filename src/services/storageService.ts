@@ -24,7 +24,6 @@ import {
   setEncryptedStorageItem,
   getEncryptedStorageItem
 } from './cryptoService';
-import { notificationService } from './notificationService';
 import { FirebaseService } from './firebaseService';
 import { recordEncryptedAuditLog } from '../security-crypto.js';
 
@@ -1168,12 +1167,6 @@ export class StorageService {
 
     const saved = await this.updateUserDirectly(updatedUser);
 
-    notificationService.sendPush({
-      title: '🎉 ¡Nuevo Crédito Fijado y Desembolsado!',
-      message: `Estimado/a ${user.fullName}, su crédito ${newTramiteId} por monto principal de $ ${breakdown.principalAmount.toLocaleString('es-CO')} COP (Pago total: $ ${breakdown.totalPaymentAmount.toLocaleString('es-CO')} COP) ha sido activado y fijado.`,
-      type: 'credit_assigned'
-    });
-
     await this.addAuditEntry(
       'NEW_CREDIT_CREATED_AND_LOCKED',
       user.id,
@@ -1538,12 +1531,6 @@ export class StorageService {
 
     const saved = await this.updateUserDirectly(updatedUser);
 
-    notificationService.sendPush({
-      title: `✅ CUOTA PAGADA (${generatedPaymentNumber})`,
-      message: `Tu cuota fue marcada como Pagada (N° ${generatedPaymentNumber}) por $ ${appliedAmount.toLocaleString('es-CO')} COP. Saldo pendiente: $ ${newBalance.toLocaleString('es-CO')} COP.`,
-      type: 'credit_assigned'
-    });
-
     await this.addAuditEntry(
       paymentType === 'CUOTA_PERSONALIZADA' ? 'LOAN_CUSTOM_PAYMENT' : 'LOAN_INSTALLMENT_PAYMENT',
       user.id,
@@ -1721,12 +1708,6 @@ export class StorageService {
 
     const saved = await this.updateUserDirectly(updatedUser);
 
-    notificationService.sendPush({
-      title: 'Firma Electrónica OTP Verificada • En Desembolso',
-      message: `Tu nuevo crédito por monto principal de $ ${newBreakdown.principalAmount.toLocaleString('es-CO')} COP (Pago total: $ ${newBreakdown.totalPaymentAmount.toLocaleString('es-CO')} COP) fue firmado con OTP (${params.otpCodeSigned}) y fijado.`,
-      type: 'credit_pending'
-    });
-
     await this.addAuditEntry(
       'NEW_LOAN_SIGNED_OTP_DISBURSEMENT_PENDING',
       user.id,
@@ -1820,12 +1801,6 @@ export class StorageService {
 
     const saved = await this.updateUserDirectly(updatedUser);
 
-    notificationService.sendPush({
-      title: '¡Desembolso Exitoso y Crédito Activo Fijado!',
-      message: `Tu crédito por monto principal de $ ${lockedBreakdown.principalAmount.toLocaleString('es-CO')} COP (Pago total: $ ${lockedBreakdown.totalPaymentAmount.toLocaleString('es-CO')} COP) ha sido desembolsado y fijado (${confirmedBySource}).`,
-      type: 'credit_assigned'
-    });
-
     await this.addAuditEntry(
       'LOAN_DISBURSEMENT_ACTIVATED',
       user.id,
@@ -1867,12 +1842,6 @@ export class StorageService {
     };
 
     const saved = await this.updateUserDirectly(updatedUser);
-
-    notificationService.sendPush({
-      title: 'Estado del Trámite Actualizado',
-      message: `El trámite ${user.creditTramiteId} no cumple los requisitos vigentes: ${reason}`,
-      type: 'credit_pending'
-    });
 
     await this.addAuditEntry(
       'CREDIT_REJECTED_BY_ADMIN',
@@ -1992,20 +1961,6 @@ export class StorageService {
     };
 
     const savedUser = await this.updateUserDirectly(updatedUser);
-
-    if (newStatus === 'ASIGNADO') {
-      notificationService.sendPush({
-        title: '🎉 ¡Préstamo Otorgado!',
-        message: `Estimado/a ${user.fullName}, préstamo trámite ${user.creditTramiteId} otorgado por $ 18.500.000 COP.`,
-        type: 'credit_assigned'
-      });
-    } else {
-      notificationService.sendPush({
-        title: '📋 Trámite Pendiente',
-        message: `El trámite ${user.creditTramiteId} se encuentra en evaluación.`,
-        type: 'credit_pending'
-      });
-    }
 
     await this.addAuditEntry(
       'CREDIT_STATUS_CHANGED',
