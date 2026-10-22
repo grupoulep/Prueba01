@@ -1229,7 +1229,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     VENTANA EN TODA LA PANTALLA AL DAR CLIC EN "PAGAR": "¿Cuánto deseas pagar?"
                    ========================================================================= */}
                 {isPaySelectionWindowOpen && !paymentModalType && (
-                  <div className="fixed inset-0 top-0 left-0 right-0 bottom-0 w-screen h-screen min-h-dvh z-[9999] bg-[#fcfaff] overflow-y-auto flex flex-col animate-fadeIn">
+                  <div className="fixed inset-0 top-0 left-0 right-0 bottom-0 w-screen h-screen min-h-dvh z-[9990] bg-[#fcfaff] overflow-y-auto flex flex-col animate-fadeIn">
                     <button
                       type="button"
                       onClick={() => {
@@ -1242,7 +1242,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       <X className="w-5 h-5" />
                     </button>
 
-                    <div className="w-full max-w-xl mx-auto px-5 sm:px-8 pt-12 pb-8 flex flex-col space-y-6">
+                    <div className="w-full max-w-xl mx-auto px-5 sm:px-8 pt-12 pb-28 flex flex-col space-y-6">
                       <div className="space-y-1.5 text-left">
                         <h2 className="text-xl sm:text-2xl font-extrabold text-black tracking-tight">
                           ¿Cuánto deseas pagar?
@@ -1368,7 +1368,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     PANEL A PANTALLA COMPLETA DE PAGO CONECTADO A LA PASARELA
                    ========================================================================= */}
                 {paymentModalType && (
-                  <div className="fixed inset-0 top-0 left-0 right-0 bottom-0 w-screen h-screen min-h-dvh z-[9999] bg-[#fcfaff] overflow-y-auto flex flex-col animate-fadeIn">
+                  <div className="fixed inset-0 top-0 left-0 right-0 bottom-0 w-screen h-screen min-h-dvh z-[9990] bg-[#fcfaff] overflow-y-auto flex flex-col animate-fadeIn">
                     {/* Botón flotante accesible para cerrar y volver */}
                     <button
                       type="button"
@@ -1384,7 +1384,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     </button>
 
                     {/* Contenedor Central Tipo Encuesta a Pantalla Completa */}
-                    <div className="w-full flex-1 px-4 sm:px-8 lg:px-12 py-6 sm:py-8 flex flex-col space-y-6">
+                    <div className="w-full flex-1 px-4 sm:px-8 lg:px-12 pt-6 sm:pt-8 pb-28 flex flex-col space-y-6">
                       {paymentOutcomeStatus === 'PAGO_PROCESADO' &&
                       efipayReceipt ? (
                         <div className="w-full flex-1 bg-white border-2 border-emerald-500 rounded-2xl p-5 sm:p-8 lg:p-10 shadow-sm flex flex-col justify-between space-y-6 animate-fadeIn">
@@ -2009,15 +2009,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
           )}
 
         {/* =========================================================================
-            RECTÁNGULO CON BORDES REDONDOS FIJO EN LA PARTE INFERIOR (INICIO Y ACTIVIDAD)
+            RECTÁNGULO CON BORDES REDONDOS FIJO EN LA PARTE INFERIOR (SIEMPRE VISIBLE EN TODOS LOS PASOS)
            ========================================================================= */}
-        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-[calc(100%-2rem)] max-w-sm bg-white border border-gray-200 shadow-lg rounded-2xl px-6 py-2.5 flex items-center justify-around">
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[10050] w-[calc(100%-2rem)] max-w-sm bg-white border border-gray-200 shadow-lg rounded-2xl px-6 py-2.5 flex items-center justify-around">
           {/* 1. Icono con una casa y debajo "Inicio" */}
           <button
             type="button"
             onClick={() => {
               setActiveBottomSection('INICIO');
               setIsPaySelectionWindowOpen(false);
+              setIsCustomAmountExpanded(false);
               setPaymentModalType(null);
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
@@ -2037,6 +2038,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             onClick={() => {
               setActiveBottomSection('ACTIVIDAD');
               setIsPaySelectionWindowOpen(false);
+              setIsCustomAmountExpanded(false);
               setPaymentModalType(null);
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
