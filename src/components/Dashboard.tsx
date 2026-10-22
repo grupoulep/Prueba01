@@ -1730,9 +1730,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
           )}
 
         {/* =========================================================================
-            RECTÁNGULO CON BORDES REDONDOS FIJO EN LA PARTE INFERIOR (SIEMPRE VISIBLE EN TODOS LOS PASOS)
+            RECTÁNGULO CON BORDES REDONDOS FIJO EN LA PARTE INFERIOR (SIEMPRE VISIBLE EN PC, TABLET Y TELÉFONO)
            ========================================================================= */}
-        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[10050] w-[calc(100%-2rem)] max-w-sm bg-white border border-gray-200 shadow-lg rounded-2xl px-6 py-2.5 flex items-center justify-around">
+        <div className="fixed bottom-3 sm:bottom-4 md:bottom-5 inset-x-0 mx-auto z-[10050] w-[calc(100%-1.5rem)] sm:w-[calc(100%-2rem)] max-w-xs sm:max-w-sm md:max-w-md bg-white border border-gray-200 shadow-lg rounded-2xl px-4 sm:px-6 md:px-8 py-2 sm:py-2.5 flex items-center justify-around">
           {/* 1. Icono con una casa y debajo "Inicio" */}
           <button
             type="button"
@@ -1746,13 +1746,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
               setPaymentOutcomeStatus(null);
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
-            className={`flex flex-col items-center justify-center gap-1 px-4 py-1 rounded-xl transition cursor-pointer ${
+            className={`flex flex-col items-center justify-center gap-1 px-3 sm:px-4 py-1 rounded-xl transition cursor-pointer ${
               activeBottomSection === 'INICIO'
                 ? 'text-purple-700 font-bold'
                 : 'text-gray-500 hover:text-gray-900 font-medium'
             }`}
           >
-            <Home className="w-5 h-5" />
+            <Home className="w-5 h-5 sm:w-5 sm:h-5" />
             <span className="text-[11px] sm:text-xs leading-none">Inicio</span>
           </button>
 
@@ -1769,13 +1769,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
               setPaymentOutcomeStatus(null);
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
-            className={`flex flex-col items-center justify-center gap-1 px-4 py-1 rounded-xl transition cursor-pointer ${
+            className={`flex flex-col items-center justify-center gap-1 px-3 sm:px-4 py-1 rounded-xl transition cursor-pointer ${
               activeBottomSection === 'ACTIVIDAD'
                 ? 'text-purple-700 font-bold'
                 : 'text-gray-500 hover:text-gray-900 font-medium'
             }`}
           >
-            <Activity className="w-5 h-5" />
+            <Activity className="w-5 h-5 sm:w-5 sm:h-5" />
             <span className="text-[11px] sm:text-xs leading-none">
               Actividad
             </span>
@@ -1801,7 +1801,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 : 'text-gray-500 hover:text-gray-900 font-medium'
             }`}
           >
-            <UserIcon className="w-5 h-5" />
+            <UserIcon className="w-5 h-5 sm:w-5 sm:h-5" />
           </button>
         </div>
       </main>
