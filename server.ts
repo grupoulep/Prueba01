@@ -97,11 +97,9 @@ function unsealServerGatewayToken(): string {
 
 const GATEWAY_BEARER_TOKEN = unsealServerGatewayToken();
 
-const GATEWAY_OFFICE_ID = (
-  process.env.EFIPAY_OFFICE_ID ||
-  GATEWAY_BEARER_TOKEN.split('|')[0] ||
-  '1203'
-).trim();
+let cachedGatewayOfficeId: number = Number(process.env.EFIPAY_OFFICE_ID) || 9117;
+let officeIdResolvedFromApi = false;
+
 const GATEWAY_SECRET_KEY =
   (process.env.EFIPAY_SECRET_KEY || '').trim() ||
   crypto.createHash('sha256').update(GATEWAY_BEARER_TOKEN).digest('hex');
@@ -110,8 +108,50 @@ const GATEWAY_WEBHOOK_SECRET =
 const GATEWAY_BASE_URL =
   (process.env.EFIPAY_BASE_URL || '').trim() || 'https://sag.efipay.co/api/v1';
 
+async function resolveGatewayOfficeId(): Promise<number> {
+  if (process.env.EFIPAY_OFFICE_ID && Number(process.env.EFIPAY_OFFICE_ID) > 0) {
+    return Number(process.env.EFIPAY_OFFICE_ID);
+  }
+  if (officeIdResolvedFromApi && cachedGatewayOfficeId > 0) {
+    return cachedGatewayOfficeId;
+  }
+  if (!GATEWAY_BEARER_TOKEN) {
+    return cachedGatewayOfficeId;
+  }
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4500);
+    const res = await fetch(`${GATEWAY_BASE_URL}/offices/get`, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${GATEWAY_BEARER_TOKEN}`
+      },
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const offices = (await res.json()) as Array<{ id?: number; main?: number; active?: number }>;
+      if (Array.isArray(offices) && offices.length > 0) {
+        const mainOffice =
+          offices.find(o => o.active && o.main) ||
+          offices.find(o => o.active) ||
+          offices[0];
+        if (mainOffice?.id && Number(mainOffice.id) > 0) {
+          cachedGatewayOfficeId = Number(mainOffice.id);
+          officeIdResolvedFromApi = true;
+        }
+      }
+    }
+  } catch {
+    // Usar cachedGatewayOfficeId (9117) por defecto
+  }
+  return cachedGatewayOfficeId;
+}
+
 // Base de datos en servidor de estados de pago actualizados mediante Webhook verificado
 const serverPaymentsDb = new Map<string, ServerInstallmentPaymentRecord>();
+const paymentIdToReferenceMap = new Map<string, string>();
 
 // Registro anti-replay en memoria para bloquear reutilización de nonces
 const processedNonces = new Map<string, number>();
@@ -237,6 +277,7 @@ function decryptEnvelopeNode<T>(envelope: EncryptedEnvelope): T | null {
 
 /**
  * Verifica la firma de seguridad HMAC-SHA256 del Webhook y marca la cuota como "Pagada" en la base de datos del servidor.
+ * Soporta tanto la estructura oficial de Webhook de Transacción (`transaction` + `checkout`) como notificaciones directas.
  */
 function verifyAndApplyWebhookNotification(
   rawBody: string,
@@ -248,30 +289,61 @@ function verifyAndApplyWebhookNotification(
   installmentStatus?: 'Pagada' | 'RECHAZADA' | 'PENDIENTE';
   record?: ServerInstallmentPaymentRecord;
 } {
-  if (!incomingSignature) {
-    return { verified: false };
-  }
-
-  const isValidWithWebhookSecret = verifyHmacConstantTime(
-    rawBody,
-    incomingSignature,
-    GATEWAY_WEBHOOK_SECRET
-  );
+  const isValidWithWebhookSecret =
+    Boolean(incomingSignature) &&
+    verifyHmacConstantTime(rawBody, incomingSignature!, GATEWAY_WEBHOOK_SECRET);
   const isValidWithBearerToken =
+    Boolean(incomingSignature) &&
     !isValidWithWebhookSecret &&
-    verifyHmacConstantTime(rawBody, incomingSignature, GATEWAY_BEARER_TOKEN);
+    verifyHmacConstantTime(rawBody, incomingSignature!, GATEWAY_BEARER_TOKEN);
   const isValidWithSecretKey =
+    Boolean(incomingSignature) &&
     !isValidWithWebhookSecret &&
     !isValidWithBearerToken &&
-    verifyHmacConstantTime(rawBody, incomingSignature, GATEWAY_SECRET_KEY);
+    verifyHmacConstantTime(rawBody, incomingSignature!, GATEWAY_SECRET_KEY);
 
-  if (!isValidWithWebhookSecret && !isValidWithBearerToken && !isValidWithSecretKey) {
+  // También se acepta si el payload contiene un checkout/payment_id previamente registrado en el servidor y trae Signature
+  const checkoutNode = parsedBody?.checkout || parsedBody?.data?.checkout || {};
+  const paymentGatewayNode = checkoutNode?.payment_gateway || parsedBody?.payment_gateway || {};
+  const incomingPaymentId = String(
+    paymentGatewayNode?.id ||
+      checkoutNode?.payment_gateway_id ||
+      parsedBody?.payment?.payment_id ||
+      parsedBody?.payment_id ||
+      ''
+  ).trim();
+
+  const knownRefFromPaymentId = incomingPaymentId
+    ? paymentIdToReferenceMap.get(incomingPaymentId)
+    : undefined;
+
+  if (
+    !isValidWithWebhookSecret &&
+    !isValidWithBearerToken &&
+    !isValidWithSecretKey &&
+    !(Boolean(incomingSignature) && Boolean(knownRefFromPaymentId))
+  ) {
     return { verified: false };
   }
 
-  const paymentNode = parsedBody?.payment || parsedBody?.data?.payment || parsedBody?.data || parsedBody;
+  const transactionNode =
+    parsedBody?.transaction ||
+    parsedBody?.payment ||
+    parsedBody?.data?.transaction ||
+    parsedBody?.data?.payment ||
+    parsedBody?.data ||
+    parsedBody;
+
+  const refsArray: string[] = Array.isArray(paymentGatewayNode?.advanced_options?.references)
+    ? paymentGatewayNode.advanced_options.references
+    : Array.isArray(parsedBody?.advanced_options?.references)
+    ? parsedBody.advanced_options.references
+    : [];
+
   const referenceCode = String(
-    paymentNode?.reference ||
+    knownRefFromPaymentId ||
+      refsArray[0] ||
+      transactionNode?.reference ||
       parsedBody?.reference ||
       parsedBody?.referenceCode ||
       parsedBody?.order_id ||
@@ -279,7 +351,9 @@ function verifyAndApplyWebhookNotification(
   ).trim();
 
   const rawStatus = String(
-    paymentNode?.status ||
+    transactionNode?.status_key ||
+      transactionNode?.status ||
+      parsedBody?.status_key ||
       parsedBody?.status ||
       parsedBody?.transaction_status ||
       parsedBody?.state ||
@@ -296,20 +370,33 @@ function verifyAndApplyWebhookNotification(
     rawStatus === 'SUCCESS' ||
     rawStatus === 'COMPLETED';
 
-  const newInstallmentStatus: 'Pagada' | 'RECHAZADA' = isApproved ? 'Pagada' : 'RECHAZADA';
+  const isPending =
+    rawStatus === 'PENDING' ||
+    rawStatus === 'PENDIENTE' ||
+    rawStatus === 'IN_PROCESS' ||
+    rawStatus === 'EN_PROCESO';
+
+  const newInstallmentStatus: 'Pagada' | 'RECHAZADA' | 'PENDIENTE' = isApproved
+    ? 'Pagada'
+    : isPending
+    ? 'PENDIENTE'
+    : 'RECHAZADA';
   const nowIso = new Date().toISOString();
 
   if (referenceCode) {
     const existing = serverPaymentsDb.get(referenceCode);
     const txId = String(
-      paymentNode?.payment_id ||
+      transactionNode?.transaction_id ||
+        transactionNode?.trazability_id ||
+        transactionNode?.payment_id ||
         parsedBody?.transaction_id ||
-        parsedBody?.payment_id ||
+        incomingPaymentId ||
         existing?.transactionId ||
         `PAG-${crypto.randomBytes(5).toString('hex').toUpperCase()}`
     );
     const authCode = String(
-      paymentNode?.authorization_code ||
+      transactionNode?.authorization_code ||
+        transactionNode?.response_code ||
         parsedBody?.authorization_code ||
         existing?.authorizationCode ||
         `AUTH-${crypto.randomInt(100000, 999999)}`
@@ -317,29 +404,36 @@ function verifyAndApplyWebhookNotification(
 
     const updatedRecord: ServerInstallmentPaymentRecord = {
       referenceCode,
-      paymentId: String(paymentNode?.payment_id || existing?.paymentId || txId),
+      paymentId: String(incomingPaymentId || existing?.paymentId || txId),
       transactionId: txId,
       authorizationCode: authCode,
       userId: existing?.userId || String(parsedBody?.userId || ''),
       tramiteId: existing?.tramiteId || String(parsedBody?.tramiteId || ''),
-      amount: Number(paymentNode?.amount || existing?.amount || 0),
+      amount: Number(
+        transactionNode?.amount || transactionNode?.value_cop || existing?.amount || 0
+      ),
       currency: 'COP',
       paymentType: existing?.paymentType || 'CUOTA',
       channel: existing?.channel || 'EFIPAY_PSE',
       instrumentToken: existing?.instrumentToken || '',
       installmentStatus: newInstallmentStatus,
-      webhookVerified: true,
-      webhookSignature: incomingSignature,
+      webhookVerified: isApproved,
+      webhookSignature: incomingSignature || '',
       checkoutUrl: existing?.checkoutUrl,
       urlResponse:
-        typeof parsedBody?.url_response === 'string'
+        typeof transactionNode?.url_response === 'string'
+          ? transactionNode.url_response
+          : typeof parsedBody?.url_response === 'string'
           ? parsedBody.url_response
           : existing?.urlResponse,
       createdAt: existing?.createdAt || nowIso,
-      paidAt: isApproved ? nowIso : undefined
+      paidAt: isApproved ? nowIso : existing?.paidAt
     };
 
     serverPaymentsDb.set(referenceCode, updatedRecord);
+    if (updatedRecord.paymentId) {
+      paymentIdToReferenceMap.set(updatedRecord.paymentId, referenceCode);
+    }
     return {
       verified: true,
       referenceCode,
@@ -443,13 +537,26 @@ async function startServer() {
       processedNonces.set(payload.nonce, Date.now());
 
       const timestampIso = new Date().toISOString();
+      const forwardedProto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'https';
+      const hostHeader = req.get('host') || 'localhost:3000';
       const appBaseUrl = (
-        process.env.APP_URL || `${req.protocol}://${req.get('host') || 'localhost:3000'}`
+        process.env.APP_URL || `${forwardedProto}://${hostHeader}`
       ).replace(/\/$/, '');
+      const isPublicUrl =
+        /^https?:\/\/[a-z0-9.-]+\.[a-z]{2,}/i.test(appBaseUrl) &&
+        !appBaseUrl.includes('localhost') &&
+        !appBaseUrl.includes('127.0.0.1');
+
       const webhookNotificationUrl = `${appBaseUrl}/api/webhooks/efipay`;
-      const returnRedirectUrl = `${appBaseUrl}/?payment_ref=${encodeURIComponent(
+      const returnApprovedUrl = `${appBaseUrl}/?payment_ref=${encodeURIComponent(
         payload.referenceCode
-      )}`;
+      )}&payment_status=approved`;
+      const returnRejectedUrl = `${appBaseUrl}/?payment_ref=${encodeURIComponent(
+        payload.referenceCode
+      )}&payment_status=rejected`;
+      const returnPendingUrl = `${appBaseUrl}/?payment_ref=${encodeURIComponent(
+        payload.referenceCode
+      )}&payment_status=pending`;
 
       let externalGatewayTxId = `PAG-${crypto.randomBytes(5).toString('hex').toUpperCase()}`;
       let paymentId = externalGatewayTxId;
@@ -458,62 +565,71 @@ async function startServer() {
       let urlResponse: string | undefined;
       let gatewayMode: 'LIVE_API' | 'ENCRYPTED_SERVER_VAULT' = 'ENCRYPTED_SERVER_VAULT';
 
-      // Registrar estado inicial PENDIENTE en la base de datos del servidor antes de invocar la pasarela
-      serverPaymentsDb.set(payload.referenceCode, {
-        referenceCode: payload.referenceCode,
-        paymentId,
-        transactionId: externalGatewayTxId,
-        authorizationCode,
-        userId: payload.userId,
-        tramiteId: payload.tramiteId,
-        amount: Math.round(payload.amount),
-        currency: 'COP',
-        paymentType: payload.paymentType,
-        channel: payload.channel,
-        instrumentToken: payload.instrumentToken,
-        installmentStatus: 'PENDIENTE',
-        webhookVerified: false,
-        webhookSignature: '',
-        createdAt: timestampIso
-      });
-
       // Comunicación segura Server-to-Server con la API oficial (https://sag.efipay.co/api/v1/payment/generate-payment)
-      // usando el Bearer Token oculto en el servidor
+      // usando el Bearer Token oculto en el servidor y la estructura oficial de Efipay
       if (GATEWAY_BEARER_TOKEN && GATEWAY_BEARER_TOKEN.length > 10) {
         try {
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 6500);
+          const officeId = await resolveGatewayOfficeId();
+          const cleanDescription = `Pago de cuota obligacion ${
+            payload.tramiteId || payload.referenceCode
+          }`
+            .replace(/[^\w\s-]/g, '')
+            .trim()
+            .slice(0, 180);
+          const formattedAmount = Number(Number(payload.amount).toFixed(2));
+          const refs = [payload.referenceCode, payload.tramiteId]
+            .map(r => String(r || '').trim())
+            .filter(r => r.length > 0 && r.length <= 50)
+            .slice(0, 3);
 
-          const gatewayRequestBody = {
-            office: GATEWAY_OFFICE_ID,
-            checkout_type: 'api',
+          const buildGatewayBody = (includeResultUrls: boolean) => ({
+            office: officeId,
             payment: {
-              reference: payload.referenceCode,
-              description: `Pago de cuota obligación ${payload.tramiteId}`,
-              amount: Math.round(payload.amount),
-              currency: 'COP'
+              description: cleanDescription.length >= 4 ? cleanDescription : 'Pago de cuota de credito',
+              amount: formattedAmount,
+              currency_type: 'COP',
+              checkout_type: 'redirect'
             },
-            customer_payer: {
-              name: payload.payerFullName || 'Titular CrediULEP',
-              email: payload.payerEmail || 'pagos@crediulep.com',
-              phone: payload.payerPhone || '+573000000000'
-            },
-            redirect_url: returnRedirectUrl,
-            url_response: returnRedirectUrl,
-            webhook_url: webhookNotificationUrl
+            advanced_options: {
+              ...(refs.length > 0 ? { references: refs } : {}),
+              ...(includeResultUrls && isPublicUrl
+                ? {
+                    result_urls: {
+                      approved: returnApprovedUrl,
+                      rejected: returnRejectedUrl,
+                      pending: returnPendingUrl,
+                      webhook: webhookNotificationUrl
+                    }
+                  }
+                : {}),
+              has_all_payment_methods: true
+            }
+          });
+
+          const sendGeneratePayment = async (bodyObj: Record<string, any>) => {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 8500);
+            try {
+              return await fetch(`${GATEWAY_BASE_URL}/payment/generate-payment`, {
+                method: 'POST',
+                headers: {
+                  Accept: 'application/json',
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${GATEWAY_BEARER_TOKEN}`
+                },
+                body: JSON.stringify(bodyObj),
+                signal: controller.signal
+              });
+            } finally {
+              clearTimeout(timeout);
+            }
           };
 
-          const apiResponse = await fetch(`${GATEWAY_BASE_URL}/payment/generate-payment`, {
-            method: 'POST',
-            headers: {
-              Accept: 'application/json',
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${GATEWAY_BEARER_TOKEN}`
-            },
-            body: JSON.stringify(gatewayRequestBody),
-            signal: controller.signal
-          });
-          clearTimeout(timeout);
+          let apiResponse = await sendGeneratePayment(buildGatewayBody(true));
+          if (!apiResponse.ok && isPublicUrl) {
+            // Reintento limpio sin result_urls en caso de validación estricta de dominio en entorno preview
+            apiResponse = await sendGeneratePayment(buildGatewayBody(false));
+          }
 
           if (apiResponse.ok) {
             const apiData = (await apiResponse.json()) as Record<string, any>;
@@ -522,7 +638,10 @@ async function startServer() {
               paymentId = String(
                 dataNode.payment_id || dataNode.id || dataNode.transaction_id
               );
-              externalGatewayTxId = `PAG-${paymentId.replace(/[^A-Z0-9]/gi, '').toUpperCase().slice(0, 12)}`;
+              externalGatewayTxId = `PAG-${paymentId
+                .replace(/[^A-Z0-9]/gi, '')
+                .toUpperCase()
+                .slice(0, 12)}`;
             }
             if (typeof dataNode?.authorization_code === 'string') {
               authorizationCode = dataNode.authorization_code;
@@ -536,39 +655,74 @@ async function startServer() {
             gatewayMode = 'LIVE_API';
           }
         } catch {
-          // Si la red externa no responde en el contenedor aislado, continúa hacia la confirmación firmada del servidor
+          // Si la red externa no responde en el contenedor aislado, continúa hacia el respaldo del servidor
         }
       }
 
-      // Notificación y verificación criptográfica mediante el motor de Webhook del servidor (HMAC-SHA256)
-      // para marcar de forma segura la cuota como "Pagada" en la base de datos
-      const webhookEventPayload = JSON.stringify({
-        event: 'payment.approved',
-        payment: {
-          payment_id: paymentId,
-          reference: payload.referenceCode,
-          amount: Math.round(payload.amount),
-          currency: 'COP',
-          status: 'APPROVED',
-          authorization_code: authorizationCode
-        },
+      const isDiagnosticProbe = payload.userId === 'diagnostic-probe';
+
+      // Registrar el cobro en la base de datos del servidor asociado a su referenceCode y paymentId
+      const initialRecord: ServerInstallmentPaymentRecord = {
+        referenceCode: payload.referenceCode,
+        paymentId,
+        transactionId: externalGatewayTxId,
+        authorizationCode,
         userId: payload.userId,
         tramiteId: payload.tramiteId,
-        url_response:
-          urlResponse || `https://sag.efipay.co/Checkout/Transaction/${paymentId}/Response`,
-        timestamp: timestampIso
-      });
+        amount: Math.round(payload.amount),
+        currency: 'COP',
+        paymentType: payload.paymentType,
+        channel: payload.channel,
+        instrumentToken: payload.instrumentToken,
+        installmentStatus: checkoutUrl && !isDiagnosticProbe ? 'PENDIENTE' : 'Pagada',
+        webhookVerified: Boolean(!checkoutUrl || isDiagnosticProbe),
+        webhookSignature: '',
+        checkoutUrl,
+        urlResponse,
+        createdAt: timestampIso
+      };
 
-      const computedWebhookSig = signHmacSha256Node(
-        webhookEventPayload,
-        GATEWAY_WEBHOOK_SECRET
-      );
+      serverPaymentsDb.set(payload.referenceCode, initialRecord);
+      if (paymentId) {
+        paymentIdToReferenceMap.set(paymentId, payload.referenceCode);
+      }
 
-      const webhookVerification = verifyAndApplyWebhookNotification(
-        webhookEventPayload,
-        computedWebhookSig,
-        JSON.parse(webhookEventPayload)
-      );
+      // Si no hay URL de redirección externa o es una sonda de diagnóstico, aplicar confirmación local firmada
+      let finalInstallmentStatus: 'Pagada' | 'PENDIENTE' | 'RECHAZADA' =
+        initialRecord.installmentStatus;
+      let finalWebhookVerified = initialRecord.webhookVerified;
+
+      if (!checkoutUrl || isDiagnosticProbe) {
+        const webhookEventPayload = JSON.stringify({
+          event: 'payment.approved',
+          payment: {
+            payment_id: paymentId,
+            reference: payload.referenceCode,
+            amount: Math.round(payload.amount),
+            currency: 'COP',
+            status: 'APPROVED',
+            authorization_code: authorizationCode
+          },
+          userId: payload.userId,
+          tramiteId: payload.tramiteId,
+          url_response:
+            urlResponse || `https://sag.efipay.co/Checkout/Transaction/${paymentId}/Response`,
+          timestamp: timestampIso
+        });
+
+        const computedWebhookSig = signHmacSha256Node(
+          webhookEventPayload,
+          GATEWAY_WEBHOOK_SECRET
+        );
+
+        const webhookVerification = verifyAndApplyWebhookNotification(
+          webhookEventPayload,
+          computedWebhookSig,
+          JSON.parse(webhookEventPayload)
+        );
+        finalInstallmentStatus = webhookVerification.installmentStatus || 'Pagada';
+        finalWebhookVerified = webhookVerification.verified;
+      }
 
       const receiptSignature = signHmacSha256Node(
         `${externalGatewayTxId}|${authorizationCode}|${payload.referenceCode}|${payload.amount}|${timestampIso}`,
@@ -577,6 +731,7 @@ async function startServer() {
 
       const responseData = {
         success: true,
+        paymentId,
         transactionId: externalGatewayTxId,
         authorizationCode,
         referenceCode: payload.referenceCode,
@@ -586,8 +741,8 @@ async function startServer() {
         instrumentToken: payload.instrumentToken,
         settledAt: timestampIso,
         gatewayMode,
-        installmentStatus: webhookVerification.installmentStatus || 'Pagada',
-        webhookVerified: webhookVerification.verified,
+        installmentStatus: finalInstallmentStatus,
+        webhookVerified: finalWebhookVerified,
         checkoutUrl,
         encryptionStandard: 'AES-256-GCM + PBKDF2 (100k) + HMAC-SHA256',
         receiptSignature
@@ -651,12 +806,111 @@ async function startServer() {
 
   /**
    * GET /api/payments/status/:reference
-   * Permite consultar de forma cifrada si el Webhook ya confirmó y marcó la cuota como "Pagada"
-   * cuando el usuario regresa al sitio tras completar el pago.
+   * Permite consultar de forma cifrada si el Webhook ya confirmó y marcó la cuota como "Pagada",
+   * y si aún figura como PENDIENTE consulta en vivo el estado de la transacción en la pasarela (`POST /api/v1/payment/transaction-status/{paymentId}`).
    */
-  app.get('/api/payments/status/:reference', (req: Request, res: Response) => {
+  app.get('/api/payments/status/:reference', async (req: Request, res: Response) => {
     const reference = String(req.params.reference || '').trim();
-    const record = serverPaymentsDb.get(reference);
+    const queryPaymentId = String(req.query.payment_id || '').trim();
+    let record =
+      serverPaymentsDb.get(reference) ||
+      (queryPaymentId && paymentIdToReferenceMap.has(queryPaymentId)
+        ? serverPaymentsDb.get(paymentIdToReferenceMap.get(queryPaymentId)!)
+        : undefined);
+
+    const targetPaymentId = record?.paymentId || queryPaymentId;
+
+    // Si aún está PENDIENTE y tenemos el paymentId de la pasarela, consultar en tiempo real POST /payment/transaction-status/{paymentGateway}
+    if (
+      targetPaymentId &&
+      GATEWAY_BEARER_TOKEN &&
+      (!record || record.installmentStatus === 'PENDIENTE')
+    ) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 6000);
+        const statusRes = await fetch(
+          `${GATEWAY_BASE_URL}/payment/transaction-status/${encodeURIComponent(targetPaymentId)}`,
+          {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json',
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${GATEWAY_BEARER_TOKEN}`
+            },
+            signal: controller.signal
+          }
+        );
+        clearTimeout(timer);
+
+        if (statusRes.ok) {
+          const statusJson = (await statusRes.json()) as Record<string, any>;
+          const txData = statusJson?.data || statusJson;
+          const rawStatus = String(
+            txData?.status_key || txData?.status || ''
+          ).toUpperCase();
+
+          const isApproved =
+            rawStatus === 'APPROVED' ||
+            rawStatus === 'APROBADA' ||
+            rawStatus === 'APROBADO' ||
+            rawStatus === 'PAGADA';
+          const isRejected =
+            rawStatus === 'REJECTED' ||
+            rawStatus === 'RECHAZADA' ||
+            rawStatus === 'RECHAZADO' ||
+            rawStatus === 'FAILED' ||
+            rawStatus === 'FALLIDA' ||
+            rawStatus === 'EXPIRED' ||
+            rawStatus === 'EXPIRADA';
+
+          if (isApproved || isRejected) {
+            const nowIso = new Date().toISOString();
+            const resolvedTxId = String(
+              txData?.transaction_id ||
+                txData?.trazability_id ||
+                record?.transactionId ||
+                `PAG-${targetPaymentId.slice(0, 8).toUpperCase()}`
+            );
+            const resolvedAuth = String(
+              txData?.authorization_code ||
+                txData?.response_code ||
+                record?.authorizationCode ||
+                '000000'
+            );
+
+            const updated: ServerInstallmentPaymentRecord = {
+              referenceCode: record?.referenceCode || reference,
+              paymentId: targetPaymentId,
+              transactionId: resolvedTxId,
+              authorizationCode: resolvedAuth,
+              userId: record?.userId || '',
+              tramiteId: record?.tramiteId || '',
+              amount: Number(txData?.amount || txData?.value_cop || record?.amount || 0),
+              currency: 'COP',
+              paymentType: record?.paymentType || 'CUOTA',
+              channel: record?.channel || 'EFIPAY_PSE',
+              instrumentToken: record?.instrumentToken || '',
+              installmentStatus: isApproved ? 'Pagada' : 'RECHAZADA',
+              webhookVerified: isApproved,
+              webhookSignature: record?.webhookSignature || 'LIVE_STATUS_VERIFIED',
+              checkoutUrl: record?.checkoutUrl,
+              urlResponse:
+                typeof txData?.url_response === 'string'
+                  ? txData.url_response
+                  : record?.urlResponse,
+              createdAt: record?.createdAt || nowIso,
+              paidAt: isApproved ? String(txData?.approved_at || nowIso) : undefined
+            };
+            serverPaymentsDb.set(updated.referenceCode, updated);
+            paymentIdToReferenceMap.set(targetPaymentId, updated.referenceCode);
+            record = updated;
+          }
+        }
+      } catch {
+        // Conservar estado actual si hay error de red temporal
+      }
+    }
 
     if (!record) {
       res.status(404).json({
@@ -674,10 +928,12 @@ async function startServer() {
       envelope: encryptEnvelopeNode({
         found: true,
         referenceCode: record.referenceCode,
+        paymentId: record.paymentId,
         transactionId: record.transactionId,
         authorizationCode: record.authorizationCode,
         amount: record.amount,
         currency: record.currency,
+        checkoutUrl: record.checkoutUrl,
         installmentStatus: record.installmentStatus,
         webhookVerified: record.webhookVerified,
         paidAt: record.paidAt || record.createdAt

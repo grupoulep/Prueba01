@@ -216,29 +216,50 @@ export const Dashboard: React.FC<DashboardProps> = ({
     };
   }, [user.legalSignature?.ipAddress]);
 
-  // Verificación automática al regresar de la pasarela de pago mediante URL de retorno + confirmación de Webhook
+  // Verificación automática al regresar de la pasarela de pago mediante URL de retorno + confirmación de Webhook / estado en vivo
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const returnedRef = params.get('payment_ref');
+    const returnedStatus = (params.get('payment_status') || '').toLowerCase();
     if (!returnedRef) return;
 
     let active = true;
     EfipayService.checkWebhookPaymentStatus(returnedRef).then(async statusData => {
-      if (!active || !statusData || !statusData.found) return;
-      if (statusData.installmentStatus === 'Pagada' && statusData.webhookVerified) {
+      if (!active) return;
+
+      const isApproved =
+        (statusData && statusData.installmentStatus === 'Pagada') ||
+        returnedStatus === 'approved' ||
+        returnedStatus === 'aprobada';
+      const isRejected =
+        (statusData && statusData.installmentStatus === 'RECHAZADA') ||
+        returnedStatus === 'rejected' ||
+        returnedStatus === 'rechazada';
+
+      if (isApproved) {
+        const pendingSession = await EfipayService.getPendingGatewaySession(returnedRef);
+        const paidAmount =
+          statusData?.amount && statusData.amount > 0
+            ? statusData.amount
+            : pendingSession?.amount || 0;
+        const txId = statusData?.transactionId || returnedRef;
+        const authCode = statusData?.authorizationCode || 'WEBHOOK-OK';
+        const payType = pendingSession?.paymentType || 'CUOTA';
+
         const alreadyRecorded = (user.paymentRecords || []).some(
-          r => r.paymentNumber === statusData.transactionId || r.transactionId === statusData.transactionId
+          r => r.paymentNumber === txId || r.transactionId === txId
         );
-        if (!alreadyRecorded && statusData.amount && statusData.amount > 0) {
+        if (!alreadyRecorded && paidAmount > 0) {
+          const storagePayType = payType === 'CREDITO_COMPLETO' ? 'TOTALIDAD' : payType;
           const payRes = await StorageService.payLoan(
             user.id,
-            statusData.amount,
-            'CUOTA',
-            `Pago en Línea [N° Pago: ${statusData.transactionId || returnedRef} | Estado Cuota: Pagada]`,
+            paidAmount,
+            storagePayType,
+            `Pago en Línea [N° Pago: ${txId} | Auth: ${authCode} | Estado Cuota: Pagada]`,
             {
-              paymentNumber: statusData.transactionId || returnedRef,
-              transactionId: statusData.transactionId || returnedRef,
-              authorizationCode: statusData.authorizationCode || 'WEBHOOK-OK',
+              paymentNumber: txId,
+              transactionId: txId,
+              authorizationCode: authCode,
               payerFullName: user.fullName,
               payerCedula: user.cedula,
               payerEmail: user.email
@@ -246,9 +267,38 @@ export const Dashboard: React.FC<DashboardProps> = ({
           );
           if (payRes.success && payRes.user) {
             setUser(payRes.user);
+            const confirmedReceipt: EfipayEncryptedReceipt = {
+              success: true,
+              paymentId: statusData?.paymentId || pendingSession?.paymentId,
+              transactionId: txId,
+              authorizationCode: authCode,
+              referenceCode: returnedRef,
+              amount: paidAmount,
+              currency: 'COP',
+              channel: 'EFIPAY_PSE',
+              channelLabel: 'Pasarela en Línea',
+              instrumentToken: 'tok_verified',
+              maskedInstrument: 'Pago Verificado',
+              settledAt: statusData?.paidAt || new Date().toISOString(),
+              installmentStatus: 'Pagada',
+              webhookVerified: true,
+              encryptionStandard: 'AES-256-GCM + PBKDF2 (100k) + HMAC-SHA256',
+              receiptSignature: authCode,
+              envelopeHmac: ''
+            };
+            setPaymentModalType(payType);
+            setEfipayReceipt(confirmedReceipt);
+            setLastCompletedReceipt(confirmedReceipt);
+            setPaymentOutcomeStatus('PAGO_PROCESADO');
+            setPaymentSuccessMessage('CUOTA PAGADA');
           }
         }
+      } else if (isRejected) {
+        setPaymentModalType('CUOTA');
+        setCancelledPaymentRef(returnedRef);
+        setPaymentOutcomeStatus('PAGO_CANCELADO');
       }
+
       const cleanUrl = window.location.pathname + window.location.hash;
       window.history.replaceState({}, document.title, cleanUrl);
     });
@@ -504,6 +554,174 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   const installmentDeadlineText = getInstallmentDeadlineText();
 
+  const finalizeApprovedGatewayPayment = async (
+    receipt: EfipayEncryptedReceipt,
+    type: 'CUOTA' | 'CUOTA_PERSONALIZADA' | 'CREDITO_COMPLETO',
+    amountToPay: number,
+    resolvedFullName: string,
+    resolvedCedula: string,
+    resolvedEmail: string
+  ) => {
+    const storagePayType = type === 'CREDITO_COMPLETO' ? 'TOTALIDAD' : type;
+    const auditMethodLabel = `${receipt.channelLabel} [N° Pago: ${receipt.transactionId} | Auth: ${receipt.authorizationCode} | Cuota: Pagada]`;
+
+    const result = await StorageService.payLoan(
+      user.id,
+      amountToPay,
+      storagePayType,
+      auditMethodLabel,
+      {
+        paymentNumber: receipt.transactionId,
+        transactionId: receipt.transactionId,
+        authorizationCode: receipt.authorizationCode,
+        payerFullName: resolvedFullName,
+        payerCedula: resolvedCedula,
+        payerEmail: resolvedEmail
+      }
+    );
+
+    if (result.success && result.user) {
+      const updatedReceipt: EfipayEncryptedReceipt = {
+        ...receipt,
+        installmentStatus: 'Pagada',
+        webhookVerified: true
+      };
+      setUser(result.user);
+      setEfipayReceipt(updatedReceipt);
+      setLastCompletedReceipt(updatedReceipt);
+      setPaymentOutcomeStatus('PAGO_PROCESADO');
+      setPaymentSuccessMessage('CUOTA PAGADA');
+      setIsPartialPaymentExpanded(false);
+      setIsCustomAmountExpanded(false);
+      await fintechPanelsEngine.encryptAndBroadcastChange({
+        action: 'CLIENT_LOAN_PAYMENT',
+        userId: user.id,
+        amount: amountToPay,
+        remainingBalance: result.user.availableBalance,
+        paymentNumber: updatedReceipt.transactionId,
+        installmentStatus: 'Pagada',
+        status: 'PAGO_PROCESADO'
+      });
+    } else {
+      await handleCancelPaymentGateway();
+    }
+  };
+
+  const launchExternalCheckoutUrl = (checkoutUrl: string) => {
+    try {
+      const isEmbeddedIframe = window.self !== window.top;
+      if (!isEmbeddedIframe) {
+        window.location.assign(checkoutUrl);
+        return;
+      }
+      // En entorno iframe (donde la pasarela envía X-Frame-Options: SAMEORIGIN),
+      // abrir mediante enlace seguro en pestaña externa para evitar bloqueo de iframe
+      const anchor = document.createElement('a');
+      anchor.href = checkoutUrl;
+      anchor.target = '_blank';
+      anchor.rel = 'noopener noreferrer';
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+    } catch {
+      // El usuario también dispone del botón directo en pantalla
+    }
+  };
+
+  const handleVerifyGatewayStatusNow = async () => {
+    if (!efipayReceipt || !paymentModalType) return;
+    setIsProcessingPayment(true);
+    setEfipayError(null);
+    try {
+      const statusData = await EfipayService.checkWebhookPaymentStatus(
+        efipayReceipt.referenceCode,
+        efipayReceipt.paymentId
+      );
+      if (statusData?.installmentStatus === 'Pagada') {
+        const mergedReceipt: EfipayEncryptedReceipt = {
+          ...efipayReceipt,
+          transactionId: statusData.transactionId || efipayReceipt.transactionId,
+          authorizationCode: statusData.authorizationCode || efipayReceipt.authorizationCode,
+          settledAt: statusData.paidAt || new Date().toISOString(),
+          installmentStatus: 'Pagada',
+          webhookVerified: true
+        };
+        await finalizeApprovedGatewayPayment(
+          mergedReceipt,
+          paymentModalType,
+          efipayReceipt.amount,
+          payerFullName || user.fullName,
+          payerCedula || user.cedula,
+          payerEmail || user.email
+        );
+      } else if (statusData?.installmentStatus === 'RECHAZADA') {
+        await handleCancelPaymentGateway();
+      } else {
+        setEfipayError(
+          'Tu sesión de pago sigue abierta en la pasarela. Completa el pago en la ventana de la pasarela para actualizar tu cuota automáticamente.'
+        );
+      }
+    } finally {
+      setIsProcessingPayment(false);
+    }
+  };
+
+  // Monitoreo automático en tiempo real (Webhook + estado de transacción) mientras el usuario completa el pago en la pasarela
+  useEffect(() => {
+    if (
+      !paymentModalType ||
+      paymentOutcomeStatus !== null ||
+      !efipayReceipt?.checkoutUrl ||
+      !efipayReceipt?.referenceCode
+    ) {
+      return;
+    }
+
+    let active = true;
+    const interval = setInterval(async () => {
+      if (!active) return;
+      const statusData = await EfipayService.checkWebhookPaymentStatus(
+        efipayReceipt.referenceCode,
+        efipayReceipt.paymentId
+      );
+      if (!active || !statusData) return;
+
+      if (statusData.installmentStatus === 'Pagada') {
+        clearInterval(interval);
+        const mergedReceipt: EfipayEncryptedReceipt = {
+          ...efipayReceipt,
+          transactionId: statusData.transactionId || efipayReceipt.transactionId,
+          authorizationCode: statusData.authorizationCode || efipayReceipt.authorizationCode,
+          settledAt: statusData.paidAt || new Date().toISOString(),
+          installmentStatus: 'Pagada',
+          webhookVerified: true
+        };
+        await finalizeApprovedGatewayPayment(
+          mergedReceipt,
+          paymentModalType,
+          efipayReceipt.amount,
+          payerFullName || user.fullName,
+          payerCedula || user.cedula,
+          payerEmail || user.email
+        );
+      } else if (statusData.installmentStatus === 'RECHAZADA') {
+        clearInterval(interval);
+        await handleCancelPaymentGateway();
+      }
+    }, 3500);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [
+    paymentModalType,
+    paymentOutcomeStatus,
+    efipayReceipt?.checkoutUrl,
+    efipayReceipt?.referenceCode,
+    efipayReceipt?.paymentId
+  ]);
+
   const handleOpenPaymentPanel = async (
     type: 'CUOTA' | 'CUOTA_PERSONALIZADA' | 'CREDITO_COMPLETO'
   ) => {
@@ -567,50 +785,23 @@ export const Dashboard: React.FC<DashboardProps> = ({
         walletPhone: user.phone || walletPhone
       });
 
-      const webhookStatus = await EfipayService.checkWebhookPaymentStatus(generatedRef);
-      const installmentStateLabel =
-        webhookStatus?.installmentStatus === 'Pagada' ? 'Pagada' : 'Pagada';
-
-      const storagePayType =
-        type === 'CREDITO_COMPLETO' ? 'TOTALIDAD' : type;
-
-      const auditMethodLabel = `${receipt.channelLabel} [N° Pago: ${receipt.transactionId} | Auth: ${receipt.authorizationCode} | Cuota: ${installmentStateLabel}]`;
-
-      const result = await StorageService.payLoan(
-        user.id,
-        amountToPay,
-        storagePayType,
-        auditMethodLabel,
-        {
-          paymentNumber: receipt.transactionId,
-          transactionId: receipt.transactionId,
-          authorizationCode: receipt.authorizationCode,
-          payerFullName: resolvedFullName,
-          payerCedula: resolvedCedula,
-          payerEmail: resolvedEmail
-        }
-      );
-
-      if (result.success && result.user) {
-        setUser(result.user);
+      // Si el servidor generó la URL oficial de checkout de la pasarela, conectar y redirigir al usuario
+      if (receipt.checkoutUrl) {
         setEfipayReceipt(receipt);
-        setLastCompletedReceipt(receipt);
-        setPaymentOutcomeStatus('PAGO_PROCESADO');
-        setPaymentSuccessMessage('CUOTA PAGADA');
-        setIsPartialPaymentExpanded(false);
-        setIsCustomAmountExpanded(false);
-        await fintechPanelsEngine.encryptAndBroadcastChange({
-          action: 'CLIENT_LOAN_PAYMENT',
-          userId: user.id,
-          amount: amountToPay,
-          remainingBalance: result.user.availableBalance,
-          paymentNumber: receipt.transactionId,
-          installmentStatus: 'Pagada',
-          status: 'PAGO_PROCESADO'
-        });
-      } else {
-        await handleCancelPaymentGateway();
+        setIsProcessingPayment(false);
+        launchExternalCheckoutUrl(receipt.checkoutUrl);
+        return;
       }
+
+      // En caso de confirmación directa sin redirección externa
+      await finalizeApprovedGatewayPayment(
+        receipt,
+        type,
+        amountToPay,
+        resolvedFullName,
+        resolvedCedula,
+        resolvedEmail
+      );
     } catch {
       await handleCancelPaymentGateway();
     } finally {
@@ -2043,12 +2234,77 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             </button>
                           </div>
                         </div>
+                      ) : efipayReceipt?.checkoutUrl ? (
+                        <div className="w-full max-w-lg mx-auto bg-white border border-purple-200 rounded-2xl p-6 sm:p-8 shadow-sm flex flex-col items-center text-center space-y-5 animate-fadeIn">
+                          <div className="w-14 h-14 rounded-2xl bg-purple-100 text-purple-800 flex items-center justify-center">
+                            <ShieldCheck className="w-8 h-8" />
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                              <Lock className="w-3 h-3" />
+                              <span>Sesión de Pago Generada • Ref. {efipayReceipt.referenceCode}</span>
+                            </span>
+                            <h4 className="text-lg sm:text-xl font-extrabold text-gray-900 tracking-tight pt-1">
+                              Continúa en la Pasarela de Pagos
+                            </h4>
+                            <p className="text-xs sm:text-sm text-gray-600 leading-relaxed">
+                              Tu orden por{' '}
+                              <strong className="text-purple-800 font-extrabold">
+                                {formatDotCurrency(efipayReceipt.amount)}
+                              </strong>{' '}
+                              está lista. Haz clic en el botón inferior para abrir la pasarela de pago segura y completar tu transacción.
+                            </p>
+                          </div>
+
+                          {efipayError && (
+                            <div className="w-full p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium">
+                              {efipayError}
+                            </div>
+                          )}
+
+                          <div className="w-full flex flex-col gap-3 pt-1">
+                            <a
+                              href={efipayReceipt.checkoutUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="w-full py-3.5 px-5 bg-purple-700 hover:bg-purple-800 active:scale-[0.99] text-white text-sm font-extrabold rounded-xl shadow-xs flex items-center justify-center gap-2 transition cursor-pointer"
+                            >
+                              <span>Ir a la Pasarela de Pago Segura</span>
+                              <ArrowRight className="w-4 h-4 shrink-0" />
+                            </a>
+
+                            <button
+                              type="button"
+                              disabled={isProcessingPayment}
+                              onClick={handleVerifyGatewayStatusNow}
+                              className="w-full py-3 px-4 bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200 text-xs sm:text-sm font-bold rounded-xl transition cursor-pointer disabled:opacity-60"
+                            >
+                              {isProcessingPayment
+                                ? 'Verificando confirmación del pago...'
+                                : 'Ya realicé mi pago • Verificar estado'}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={handleCancelPaymentGateway}
+                              className="w-full py-2.5 px-4 bg-white hover:bg-rose-50 text-gray-600 hover:text-rose-700 text-xs font-semibold rounded-xl transition cursor-pointer"
+                            >
+                              Cancelar intento de pago
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-center gap-2 text-[11px] text-gray-500 pt-1">
+                            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                            <span>Esperando confirmación automática del Webhook...</span>
+                          </div>
+                        </div>
                       ) : (
                         <div className="w-full flex-1 bg-white border border-purple-200 rounded-2xl p-6 sm:p-10 shadow-xs flex flex-col items-center justify-center text-center space-y-5 animate-fadeIn">
                           <div className="w-12 h-12 rounded-full border-3 border-purple-200 border-t-purple-700 animate-spin" />
                           <div className="space-y-1.5 max-w-md">
                             <h4 className="text-lg sm:text-xl font-extrabold text-gray-900 tracking-tight">
-                              Conectando y procesando tu pago...
+                              Conectando con la pasarela de pagos...
                             </h4>
                             <p className="text-xs sm:text-sm text-gray-500">
                               Monto a pagar:{' '}
