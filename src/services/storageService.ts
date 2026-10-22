@@ -707,6 +707,75 @@ export class StorageService {
           users.push({ ...user2Base, integrityChecksum: checksum2 });
         }
 
+        // 2.4 Cliente con Cupo Aprobado y Solicitud de Desembolso Pendiente de Aprobar
+        const lauraIndex = users.findIndex(u => u.cedula === '1040506070');
+        if (lauraIndex === -1) {
+          const cedulaLaura = '1040506070';
+          const passHashLaura = await hashPassword('Password123!', cedulaLaura);
+          const lauraBreakdown = this.buildFixedLoanBreakdown({
+            tramiteId: 'TRM-554120',
+            principalAmount: 10000000,
+            termMonths: 12,
+            interestRatePercentage: 1.85,
+            fianzaPercentage: 6.5,
+            electronicSignatureFee: 28500,
+            electronicSignatureCode: 'OTP-774102 (SIG-LAU-55412)',
+            collectionExpenses: 0,
+            ivaPercentage: 19,
+            paymentDeadline: '2026-11-25',
+            lockedAt: '2026-10-20T11:20:00Z',
+            isLockedWhileActive: false
+          });
+          const userLauraBase: Omit<User, 'integrityChecksum'> = {
+            id: 'usr-lau-004',
+            cedula: cedulaLaura,
+            fullName: 'Laura Sofía Mendoza',
+            email: 'l.mendoza@seguro.com',
+            phone: '+57 318 440 2211',
+            passwordHash: passHashLaura,
+            role: 'CLIENT',
+            isActive: true,
+            createdAt: '2026-10-20T11:00:00Z',
+            twoFactorEnabled: true,
+            creditStatus: 'ASIGNADO',
+            availableBalance: 0,
+            creditLimit: 15000000,
+            creditAssignedDate: '2026-10-20',
+            creditTramiteId: 'TRM-554120',
+            paymentStatus: 'EN_DESEMBOLSO',
+            daysOverdue: 0,
+            loanTermMonths: 12,
+            customInstallmentAmount: lauraBreakdown.monthlyInstallmentAmount,
+            nextPaymentDate: '2026-11-25',
+            taxPercentageApplied: 19,
+            interestRateApplied: 1.85,
+            activeLoanBreakdown: lauraBreakdown,
+            disbursementRequest: {
+              tramiteId: 'TRM-554120',
+              requestedAmount: 10000000,
+              requestedTermMonths: 12,
+              estimatedMonthlyInstallment: lauraBreakdown.monthlyInstallmentAmount,
+              bankEntity: 'Bancolombia',
+              accountType: 'AHORROS',
+              accountNumber: '4590-7712-9081',
+              otpCodeSigned: '774102',
+              signatureHash: 'c8f1e44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852d901',
+              signedAt: '2026-10-20T11:20:00Z',
+              acceptedTerms: true,
+              acceptedPromissoryNote: true,
+              acceptedBankMandate: true,
+              bankApiReference: 'ACH-BANC-554120',
+              status: 'EN_PROCESO_DESEMBOLSO',
+              loanBreakdown: lauraBreakdown
+            },
+            acceptedPrivacyPolicy: true,
+            acceptedPrivacyDate: '2026-10-20T11:00:00Z',
+            failedLoginAttempts: 0
+          };
+          const checksumLaura = await calculateUserIntegrityChecksum(userLauraBase);
+          users.push({ ...userLauraBase, integrityChecksum: checksumLaura });
+        }
+
         // 3. Semilla de Trabajador / Operador
         const workerExists = users.some(u => u.cedula === 'OP-2001');
         if (!workerExists) {
@@ -1183,7 +1252,9 @@ export class StorageService {
   }
 
   /**
-   * Aprobación de crédito por Administrador o Trabajador autorizado
+   * Aprobación de CUPO por persona (Iniciando con Deuda en $0) por Administrador o Trabajador autorizado.
+   * Al aprobarse el registro, se habilita únicamente el cupo del cliente iniciando en 0 de deuda,
+   * para que el cliente pueda solicitar posteriormente su desembolso.
    */
   static async approveUserCredit(userId: string, newBalance: number, adminName: string): Promise<{ success: boolean; user?: User; message: string }> {
     const { users } = await this.getUsers();
@@ -1197,26 +1268,64 @@ export class StorageService {
       return {
         success: false,
         message:
-          'BLOQUEO FINTECH: El crédito del cliente ya está ACTIVO y FIJADO. No se puede editar, borrar ni cambiar mientras esté activo.'
+          'BLOQUEO FINTECH: El crédito del cliente ya está ACTIVO y FIJADO con deuda vigente. No se puede editar mientras esté activo.'
       };
     }
 
-    const principal =
+    const approvedCupo =
       newBalance > 0
-        ? newBalance
-        : user.activeLoanBreakdown?.principalAmount || user.creditLimit || 10000000;
+        ? Math.round(newBalance)
+        : user.creditLimit > 0
+        ? user.creditLimit
+        : user.activeLoanBreakdown?.principalAmount || 10000000;
 
-    return await this.createAndLockClientCredit(
-      userId,
-      {
-        principalAmount: principal,
-        termMonths: user.loanTermMonths || 12,
-        paymentDeadline:
-          user.nextPaymentDate ||
-          new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-      },
-      adminName
+    const loanSettings = this.getLoanSettings();
+    const tramiteId =
+      user.creditTramiteId || 'TRM-' + Math.floor(100000 + Math.random() * 900000);
+    const termMonths = user.loanTermMonths || loanSettings.defaultTermMonths || 12;
+    const defaultDeadline =
+      user.nextPaymentDate ||
+      new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    const cupoReferenceBreakdown = this.buildFixedLoanBreakdown({
+      tramiteId,
+      principalAmount: approvedCupo,
+      termMonths,
+      paymentDeadline: defaultDeadline,
+      isLockedWhileActive: false
+    });
+
+    const updatedUser: User = {
+      ...user,
+      creditStatus: 'ASIGNADO',
+      paymentStatus: 'PAZ_Y_SALVO',
+      creditTramiteId: tramiteId,
+      creditLimit: approvedCupo,
+      availableBalance: 0, // Inicia en $0 de deuda; solo se aprueba el cupo
+      daysOverdue: 0,
+      loanTermMonths: termMonths,
+      customInstallmentAmount: 0,
+      creditAssignedDate: new Date().toISOString().split('T')[0],
+      nextPaymentDate: defaultDeadline,
+      activeLoanBreakdown: cupoReferenceBreakdown,
+      disbursementRequest: undefined,
+      integrityChecksum: ''
+    };
+
+    const saved = await this.updateUserDirectly(updatedUser);
+
+    await this.addAuditEntry(
+      'CREDIT_LIMIT_APPROVED_ZERO_DEBT',
+      user.id,
+      user.cedula,
+      `Cupo aprobado por ${adminName} (${tramiteId}): Cupo Habilitado=$${approvedCupo.toLocaleString('es-CO')} COP, Deuda Inicial=$0 COP. Cliente habilitado para solicitar desembolso.`
     );
+
+    return {
+      success: true,
+      user: saved,
+      message: `Cupo de $${approvedCupo.toLocaleString('es-CO')} aprobado para ${user.fullName} (Deuda inicial: $0).`
+    };
   }
 
   /**
@@ -1313,7 +1422,7 @@ export class StorageService {
       passwordHash = await hashPassword('Password123!', cleanNewCedula);
     }
 
-    // Si el crédito NO estaba activo y pasa a ASIGNADO con monto, generamos y fijamos su desglose
+    const hasActiveDebt = Number(updates.availableBalance) > 0;
     const becomingActive =
       !isLockedActiveCredit &&
       (!current.role || current.role === 'CLIENT') &&
@@ -1337,7 +1446,7 @@ export class StorageService {
               ? Number(updates.taxPercentageApplied)
               : current.taxPercentageApplied,
           paymentDeadline: updates.nextPaymentDate || current.nextPaymentDate,
-          isLockedWhileActive: true
+          isLockedWhileActive: hasActiveDebt
         })
       : current.activeLoanBreakdown;
 
@@ -1353,26 +1462,30 @@ export class StorageService {
       creditTramiteId: isLockedActiveCredit ? current.creditTramiteId : newTramite,
       creditLimit: isLockedActiveCredit
         ? current.creditLimit
-        : newBreakdown?.principalAmount ?? (Number(updates.creditLimit) || 0),
+        : Number(updates.creditLimit) || 0,
       availableBalance: isLockedActiveCredit
         ? current.availableBalance
         : updates.creditStatus === 'ASIGNADO'
-        ? Number(updates.availableBalance) > 0
-          ? Number(updates.availableBalance)
-          : newBreakdown?.totalPaymentAmount ?? 0
+        ? Math.max(0, Number(updates.availableBalance) || 0)
         : 0,
       customInstallmentAmount: isLockedActiveCredit
         ? current.customInstallmentAmount
         : updates.customInstallmentAmount !== undefined
         ? Number(updates.customInstallmentAmount)
-        : newBreakdown?.monthlyInstallmentAmount ?? current.customInstallmentAmount,
+        : hasActiveDebt
+        ? newBreakdown?.monthlyInstallmentAmount ?? current.customInstallmentAmount
+        : 0,
       loanTermMonths: isLockedActiveCredit
         ? current.loanTermMonths
         : Number(updates.loanTermMonths) || 12,
       paymentStatus: isLockedActiveCredit
         ? current.paymentStatus
         : updates.paymentStatus ||
-          (updates.creditStatus === 'ASIGNADO' ? 'AL_DIA' : 'SIN_ACEPTAR'),
+          (updates.creditStatus === 'ASIGNADO'
+            ? hasActiveDebt
+              ? 'AL_DIA'
+              : 'PAZ_Y_SALVO'
+            : 'SIN_ACEPTAR'),
       daysOverdue: isLockedActiveCredit
         ? current.daysOverdue
         : Number(updates.daysOverdue) || 0,
@@ -1668,8 +1781,14 @@ export class StorageService {
       electronicSignatureCode: `OTP-${params.otpCodeSigned} (${sigHash.slice(0, 10).toUpperCase()})`,
       paymentDeadline: params.nextPaymentDate || user.nextPaymentDate,
       lockedAt: signedAt,
-      isLockedWhileActive: true
+      isLockedWhileActive: false
     });
+
+    // Conservar el cupo total aprobado del cliente (se disminuirá su disponible al aprobarse el desembolso)
+    const preservedCupoLimit = Math.max(
+      user.creditLimit || 0,
+      newBreakdown.principalAmount
+    );
 
     const updatedUser: User = {
       ...user,
@@ -1679,7 +1798,7 @@ export class StorageService {
       creditStatus: 'ASIGNADO',
       paymentStatus: 'EN_DESEMBOLSO',
       creditTramiteId: newTramiteId,
-      creditLimit: newBreakdown.principalAmount,
+      creditLimit: preservedCupoLimit,
       availableBalance: 0,
       loanTermMonths: newBreakdown.termMonths,
       customInstallmentAmount: newBreakdown.monthlyInstallmentAmount,
@@ -1712,23 +1831,24 @@ export class StorageService {
       'NEW_LOAN_SIGNED_OTP_DISBURSEMENT_PENDING',
       user.id,
       user.cedula,
-      `Nuevo crédito firmado con OTP (${params.otpCodeSigned}) y FIJADO: Principal=$${newBreakdown.principalAmount.toLocaleString('es-CO')}, Interés=$${newBreakdown.interestAmount.toLocaleString('es-CO')}, Fianza=$${newBreakdown.fianzaAmount.toLocaleString('es-CO')}, Firma=$${newBreakdown.electronicSignatureFee.toLocaleString('es-CO')}, Cobranza=$${newBreakdown.collectionExpenses.toLocaleString('es-CO')}, IVA=$${newBreakdown.ivaAmount.toLocaleString('es-CO')}, Pago Total=$${newBreakdown.totalPaymentAmount.toLocaleString('es-CO')}. Estado: EN PROCESO DE DESEMBOLSO.`
+      `Solicitud de desembolso firmada con OTP (${params.otpCodeSigned}): Cupo Aprobado=$${preservedCupoLimit.toLocaleString('es-CO')}, Desembolso Solicitado=$${newBreakdown.principalAmount.toLocaleString('es-CO')}, Interés=$${newBreakdown.interestAmount.toLocaleString('es-CO')}, Fianza=$${newBreakdown.fianzaAmount.toLocaleString('es-CO')}, Firma=$${newBreakdown.electronicSignatureFee.toLocaleString('es-CO')}, IVA=$${newBreakdown.ivaAmount.toLocaleString('es-CO')}, Deuda Total a Cargar=$${newBreakdown.totalPaymentAmount.toLocaleString('es-CO')}. Pendiente de aprobación en Panel Aprobar Desembolso.`
     );
 
     return {
       success: true,
       user: saved,
-      message: 'Firma electrónica OTP validada y condiciones fijadas. Tu crédito está en proceso de desembolso.'
+      message: 'Solicitud de desembolso enviada. Se reflejará como deuda y disminución de tu cupo al ser aprobada.'
     };
   }
 
   /**
-   * Activa y confirma el desembolso de un crédito (ya sea vía API de la Entidad Bancaria o por aceptación del Personal)
-   * Al activarse el desembolso, el crédito queda FIJADO e INMUTABLE mientras esté activo.
+   * Aprueba y confirma el desembolso de un crédito desde el Panel Admin / Trabajador ("Aprobar Desembolso").
+   * Esta aprobación se marca como disminución del cupo disponible del cliente y como deuda activa en su panel.
    */
   static async confirmLoanDisbursement(
     userId: string,
-    confirmedBySource: string
+    confirmedBySource: string,
+    customDisbursementPrincipal?: number
   ): Promise<{ success: boolean; user?: User; message: string }> {
     const { users } = await this.getUsers();
     const index = users.findIndex(u => u.id === userId);
@@ -1739,11 +1859,13 @@ export class StorageService {
     const user = users[index];
     const req = user.disbursementRequest;
     const disbursedPrincipal =
-      req?.loanBreakdown?.principalAmount ||
-      req?.requestedAmount ||
-      user.activeLoanBreakdown?.principalAmount ||
-      user.creditLimit ||
-      10000000;
+      customDisbursementPrincipal && customDisbursementPrincipal > 0
+        ? Math.round(customDisbursementPrincipal)
+        : req?.loanBreakdown?.principalAmount ||
+          req?.requestedAmount ||
+          user.activeLoanBreakdown?.principalAmount ||
+          user.creditLimit ||
+          10000000;
     const termMonths =
       req?.loanBreakdown?.termMonths ||
       req?.requestedTermMonths ||
@@ -1759,27 +1881,48 @@ export class StorageService {
       nextDateObj.toISOString().split('T')[0];
 
     const lockedBreakdown: LoanFinancialBreakdown =
-      req?.loanBreakdown ||
-      user.activeLoanBreakdown ||
-      this.buildFixedLoanBreakdown({
-        tramiteId: req?.tramiteId || user.creditTramiteId,
-        principalAmount: disbursedPrincipal,
-        termMonths,
-        electronicSignatureCode: req?.otpCodeSigned
-          ? `OTP-${req.otpCodeSigned}`
-          : undefined,
-        paymentDeadline: nextPaymentDate,
-        isLockedWhileActive: true
-      });
+      customDisbursementPrincipal && customDisbursementPrincipal > 0
+        ? this.buildFixedLoanBreakdown({
+            tramiteId: req?.tramiteId || user.creditTramiteId,
+            principalAmount: disbursedPrincipal,
+            termMonths,
+            electronicSignatureCode: req?.otpCodeSigned
+              ? `OTP-${req.otpCodeSigned}`
+              : undefined,
+            paymentDeadline: nextPaymentDate,
+            isLockedWhileActive: true
+          })
+        : req?.loanBreakdown ||
+          user.activeLoanBreakdown ||
+          this.buildFixedLoanBreakdown({
+            tramiteId: req?.tramiteId || user.creditTramiteId,
+            principalAmount: disbursedPrincipal,
+            termMonths,
+            electronicSignatureCode: req?.otpCodeSigned
+              ? `OTP-${req.otpCodeSigned}`
+              : undefined,
+            paymentDeadline: nextPaymentDate,
+            isLockedWhileActive: true
+          });
 
     lockedBreakdown.isLockedWhileActive = true;
     lockedBreakdown.lockedAt = new Date().toISOString();
+
+    // El cupo total aprobado del cliente se mantiene; su cupo disponible disminuye por el desembolso y pasa a ser deuda
+    const approvedCupoLimit = Math.max(
+      user.creditLimit || 0,
+      lockedBreakdown.principalAmount
+    );
+    const remainingAvailableCupo = Math.max(
+      0,
+      approvedCupoLimit - lockedBreakdown.principalAmount
+    );
 
     const updatedUser: User = {
       ...user,
       creditStatus: 'ASIGNADO',
       paymentStatus: 'AL_DIA',
-      creditLimit: lockedBreakdown.principalAmount,
+      creditLimit: approvedCupoLimit,
       availableBalance: lockedBreakdown.totalPaymentAmount,
       loanTermMonths: lockedBreakdown.termMonths,
       customInstallmentAmount: lockedBreakdown.monthlyInstallmentAmount,
@@ -1795,23 +1938,83 @@ export class StorageService {
             confirmedAt: new Date().toISOString(),
             loanBreakdown: lockedBreakdown
           }
-        : undefined,
+        : {
+            tramiteId: lockedBreakdown.tramiteId,
+            requestedAmount: lockedBreakdown.principalAmount,
+            requestedTermMonths: lockedBreakdown.termMonths,
+            estimatedMonthlyInstallment: lockedBreakdown.monthlyInstallmentAmount,
+            bankEntity: 'Transferencia Autorizada',
+            accountType: 'AHORROS',
+            accountNumber: 'Cuenta Registrada',
+            otpCodeSigned: 'AUTORIZADO-ADMIN',
+            signatureHash: 'DirectDisbursementApproved',
+            signedAt: new Date().toISOString(),
+            acceptedTerms: true,
+            acceptedPromissoryNote: true,
+            acceptedBankMandate: true,
+            bankApiReference: `DES-${lockedBreakdown.tramiteId}`,
+            status: 'DESEMBOLSADO',
+            confirmedBy: confirmedBySource,
+            confirmedAt: new Date().toISOString(),
+            loanBreakdown: lockedBreakdown
+          },
       integrityChecksum: ''
     };
 
     const saved = await this.updateUserDirectly(updatedUser);
 
     await this.addAuditEntry(
-      'LOAN_DISBURSEMENT_ACTIVATED',
+      'LOAN_DISBURSEMENT_APPROVED_DEBT_ASSIGNED',
       user.id,
       user.cedula,
-      `Desembolso confirmado y FIJADO por [${confirmedBySource}]: Principal=$${lockedBreakdown.principalAmount.toLocaleString('es-CO')}, Pago Total=$${lockedBreakdown.totalPaymentAmount.toLocaleString('es-CO')}. Ref: ${req?.bankApiReference || user.creditTramiteId}.`
+      `Desembolso aprobado por [${confirmedBySource}]: Disminución de Cupo=-$${lockedBreakdown.principalAmount.toLocaleString('es-CO')} COP (Cupo Total=$${approvedCupoLimit.toLocaleString('es-CO')}, Cupo Disponible Restante=$${remainingAvailableCupo.toLocaleString('es-CO')}), Deuda Cargada al Cliente=$${lockedBreakdown.totalPaymentAmount.toLocaleString('es-CO')} COP. Ref: ${req?.bankApiReference || user.creditTramiteId}.`
     );
 
     return {
       success: true,
       user: saved,
-      message: `Desembolso confirmado (${confirmedBySource}). El crédito ya está activo y fijado.`
+      message: `Desembolso aprobado: Disminución de cupo por $${lockedBreakdown.principalAmount.toLocaleString('es-CO')} y deuda activa de $${lockedBreakdown.totalPaymentAmount.toLocaleString('es-CO')}.`
+    };
+  }
+
+  /**
+   * Rechaza o cancela una solicitud de desembolso pendiente, restaurando el cupo disponible sin cargar deuda
+   */
+  static async rejectLoanDisbursement(
+    userId: string,
+    reason: string,
+    actorName: string
+  ): Promise<{ success: boolean; user?: User; message: string }> {
+    const { users } = await this.getUsers();
+    const index = users.findIndex(u => u.id === userId);
+    if (index === -1) {
+      return { success: false, message: 'Usuario no encontrado.' };
+    }
+
+    const user = users[index];
+    const updatedUser: User = {
+      ...user,
+      creditStatus: 'ASIGNADO',
+      paymentStatus: 'PAZ_Y_SALVO',
+      availableBalance: 0,
+      customInstallmentAmount: 0,
+      disbursementRequest: undefined,
+      integrityChecksum: ''
+    };
+
+    const saved = await this.updateUserDirectly(updatedUser);
+
+    await this.addAuditEntry(
+      'LOAN_DISBURSEMENT_REJECTED',
+      user.id,
+      user.cedula,
+      `Solicitud de desembolso rechazada por ${actorName}. Motivo: ${reason}. El cupo de $${(user.creditLimit || 0).toLocaleString('es-CO')} permanece intacto con deuda $0.`
+    );
+
+    return {
+      success: true,
+      user: saved,
+      message: `Solicitud de desembolso rechazada para ${user.fullName}. Su cupo sigue en $0 de deuda.`
     };
   }
 

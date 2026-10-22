@@ -859,6 +859,12 @@ async function startServer() {
             rawStatus === 'REJECTED' ||
             rawStatus === 'RECHAZADA' ||
             rawStatus === 'RECHAZADO' ||
+            rawStatus === 'CANCELLED' ||
+            rawStatus === 'CANCELED' ||
+            rawStatus === 'CANCELADA' ||
+            rawStatus === 'CANCELADO' ||
+            rawStatus === 'DECLINED' ||
+            rawStatus === 'ERROR' ||
             rawStatus === 'FAILED' ||
             rawStatus === 'FALLIDA' ||
             rawStatus === 'EXPIRED' ||

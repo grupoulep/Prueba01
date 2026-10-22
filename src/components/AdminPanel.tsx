@@ -45,6 +45,7 @@ interface AdminPanelProps {
 type LeftActionKey =
   | 'ALL_PORTFOLIO'
   | 'APPROVE_PENDING'
+  | 'APPROVE_DISBURSEMENT'
   | 'OVERDUE_COLLECTION'
   | 'QUICK_PAYMENT'
   | 'NEW_RECORD'
@@ -80,15 +81,15 @@ const ALL_WORKER_PERMISSIONS: {
   label: string;
   actionKey?: LeftActionKey;
 }[] = [
-  { key: 'VER_CARTERA', label: 'Ver Cartera', actionKey: 'ALL_PORTFOLIO' },
-  { key: 'EDITAR_CLIENTES', label: 'Editar Clientes', actionKey: 'ALL_PORTFOLIO' },
-  { key: 'APROBAR_CREDITOS', label: 'Aprobar Créditos', actionKey: 'APPROVE_PENDING' },
-  { key: 'RECHAZAR_CREDITOS', label: 'Rechazar Créditos', actionKey: 'APPROVE_PENDING' },
-  { key: 'GESTIONAR_MORA', label: 'Cobranza y Mora', actionKey: 'OVERDUE_COLLECTION' },
-  { key: 'REGISTRAR_PAGOS', label: 'Registrar Abonos', actionKey: 'QUICK_PAYMENT' },
-  { key: 'CREAR_USUARIOS', label: 'Crear Clientes', actionKey: 'NEW_RECORD' },
-  { key: 'CONFIGURAR_SISTEMA', label: 'Tasas y Cupos', actionKey: 'LOAN_POLICIES' },
-  { key: 'VER_AUDITORIA', label: 'Auditoría PDF', actionKey: 'AUDIT_LEDGER' }
+  { key: 'VER_CARTERA', label: 'Estadísticas', actionKey: 'ALL_PORTFOLIO' },
+  { key: 'EDITAR_CLIENTES', label: 'Desembolsos', actionKey: 'APPROVE_DISBURSEMENT' },
+  { key: 'APROBAR_CREDITOS', label: 'Aprobar Cupo', actionKey: 'APPROVE_PENDING' },
+  { key: 'RECHAZAR_CREDITOS', label: 'Rechazar', actionKey: 'APPROVE_PENDING' },
+  { key: 'GESTIONAR_MORA', label: 'Mora', actionKey: 'OVERDUE_COLLECTION' },
+  { key: 'REGISTRAR_PAGOS', label: 'Abonos', actionKey: 'QUICK_PAYMENT' },
+  { key: 'CREAR_USUARIOS', label: 'Crear', actionKey: 'NEW_RECORD' },
+  { key: 'CONFIGURAR_SISTEMA', label: 'Tasas', actionKey: 'LOAN_POLICIES' },
+  { key: 'VER_AUDITORIA', label: 'Auditoría', actionKey: 'AUDIT_LEDGER' }
 ];
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({
@@ -147,6 +148,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // Controles rápidos por usuario (Cliente o Trabajador)
   const [inlinePaymentAmounts, setInlinePaymentAmounts] = useState<Record<string, string>>({});
   const [inlineNewPassword, setInlineNewPassword] = useState<Record<string, string>>({});
+  const [inlineApproveCupo, setInlineApproveCupo] = useState<Record<string, string>>({});
+  const [inlineDisbursementPrincipal, setInlineDisbursementPrincipal] = useState<Record<string, string>>({});
   const [quickPaySelectedUserId, setQuickPaySelectedUserId] = useState<string>('');
   const [quickPayAmount, setQuickPayAmount] = useState<string>('');
 
@@ -164,7 +167,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [newPhone, setNewPhone] = useState<string>('');
   const [newPassword, setNewPassword] = useState<string>('Password123!');
   const [newLimit, setNewLimit] = useState<string>('12000000');
-  const [newDebt, setNewDebt] = useState<string>('12000000');
+  const [newDebt, setNewDebt] = useState<string>('0');
   const [newTermMonths, setNewTermMonths] = useState<string>('12');
   const [newInterestRate, setNewInterestRate] = useState<string>('1.85');
   const [newFianzaRate, setNewFianzaRate] = useState<string>('3.5');
@@ -267,18 +270,55 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     [users]
   );
 
-  // Resumen financiero en vivo
+  // Resumen financiero, estadístico y de control de plataforma en vivo
   const portfolioSummary = useMemo(() => {
     let alDiaCount = 0;
     let enMoraCount = 0;
     let pendienteCount = 0;
     let enDesembolsoCount = 0;
+    let rechazadoCount = 0;
+    let cupoEnCeroDeudaCount = 0;
+    let activosConDeudaCount = 0;
+
     let totalCupo = 0;
     let totalDeuda = 0;
+    let totalCupoDisminuido = 0;
+    let totalRecaudado = 0;
+
+    let totalPrincipalDesembolsado = 0;
+    let totalInteresesProyectados = 0;
+    let totalFianzaGarantias = 0;
+    let totalFirmaElectronica = 0;
+    let totalGastosCobranza = 0;
+    let totalIvaLiquidado = 0;
+    let totalFacturacionActiva = 0;
+    let sumaPlazos = 0;
+    let conteoPlazos = 0;
+    let totalPagosProcesadosCount = 0;
 
     clientUsers.forEach(u => {
-      totalCupo += Number(u.creditLimit) || 0;
-      totalDeuda += Number(u.availableBalance) || 0;
+      const cupo = Number(u.creditLimit) || 0;
+      const deuda = Number(u.availableBalance) || 0;
+      totalCupo += cupo;
+      totalDeuda += deuda;
+
+      // Sumar pagos registrados en historial de pagos
+      if (Array.isArray(u.paymentRecords)) {
+        u.paymentRecords.forEach(pr => {
+          if (pr.status === 'PAGO_PROCESADO') {
+            totalRecaudado += Number(pr.amount) || 0;
+            totalPagosProcesadosCount++;
+          }
+        });
+      }
+
+      // Sumar préstamos históricos cerrados
+      if (Array.isArray(u.previousLoans)) {
+        u.previousLoans.forEach(pl => {
+          totalRecaudado += Number(pl.totalPaid) || 0;
+        });
+      }
+
       if (
         u.paymentStatus === 'EN_DESEMBOLSO' ||
         u.disbursementRequest?.status === 'EN_PROCESO_DESEMBOLSO'
@@ -286,14 +326,66 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         enDesembolsoCount++;
       } else if (u.creditStatus === 'PENDIENTE') {
         pendienteCount++;
+      } else if (u.creditStatus === 'RECHAZADO') {
+        rechazadoCount++;
       } else if (u.paymentStatus === 'EN_MORA' || (u.daysOverdue || 0) > 0) {
         enMoraCount++;
       } else if (u.creditStatus === 'ASIGNADO') {
         alDiaCount++;
       }
+
+      if (
+        u.creditStatus === 'ASIGNADO' &&
+        deuda === 0 &&
+        u.paymentStatus !== 'EN_DESEMBOLSO' &&
+        u.disbursementRequest?.status !== 'EN_PROCESO_DESEMBOLSO'
+      ) {
+        cupoEnCeroDeudaCount++;
+      }
+
+      if (deuda > 0) {
+        activosConDeudaCount++;
+        const lb = u.loanBreakdown;
+        const principalActivo = lb?.principalAmount || Math.min(cupo, deuda);
+        const totalCredito = lb?.totalPaymentAmount || Math.max(deuda, principalActivo);
+        const ratioPendiente = totalCredito > 0 ? Math.min(1, deuda / totalCredito) : 1;
+        const disminucionCupoCliente = Math.min(
+          cupo,
+          Math.round(principalActivo * ratioPendiente)
+        );
+        totalCupoDisminuido += disminucionCupoCliente;
+
+        // Si el cliente ha abonado sobre la deuda activa y no tenía paymentRecords explícitos
+        const abonadoEnActivo = Math.max(0, totalCredito - deuda);
+        if (!u.paymentRecords || u.paymentRecords.length === 0) {
+          totalRecaudado += abonadoEnActivo;
+        }
+
+        totalPrincipalDesembolsado += lb?.principalAmount || principalActivo;
+        totalInteresesProyectados += lb?.interestAmount || 0;
+        totalFianzaGarantias += lb?.fianzaAmount || 0;
+        totalFirmaElectronica += lb?.electronicSignatureFee || 0;
+        totalGastosCobranza += lb?.collectionExpenses || 0;
+        totalIvaLiquidado += lb?.ivaAmount || 0;
+        totalFacturacionActiva += totalCredito;
+        sumaPlazos += Number(u.loanTermMonths || lb?.termMonths || 12);
+        conteoPlazos++;
+      }
     });
 
-    const totalRecaudado = Math.max(0, totalCupo - totalDeuda);
+    const totalCupoDisponible = Math.max(0, totalCupo - totalCupoDisminuido);
+    const utilizacionCupoPercent =
+      totalCupo > 0 ? Math.min(100, Math.round((totalCupoDisminuido / totalCupo) * 100)) : 0;
+    const tasaRecuperacion =
+      totalRecaudado + totalDeuda > 0
+        ? Math.round((totalRecaudado / (totalRecaudado + totalDeuda)) * 100)
+        : 100;
+    const indiceMorosidad =
+      activosConDeudaCount > 0
+        ? Math.round((enMoraCount / activosConDeudaCount) * 100)
+        : 0;
+    const plazoPromedioMeses =
+      conteoPlazos > 0 ? Math.round(sumaPlazos / conteoPlazos) : 12;
 
     return {
       totalClients: clientUsers.length,
@@ -301,9 +393,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       enMoraCount,
       pendienteCount,
       enDesembolsoCount,
+      rechazadoCount,
+      cupoEnCeroDeudaCount,
+      activosConDeudaCount,
       totalCupo,
       totalDeuda,
-      totalRecaudado
+      totalCupoDisminuido,
+      totalCupoDisponible,
+      totalRecaudado,
+      utilizacionCupoPercent,
+      tasaRecuperacion,
+      indiceMorosidad,
+      totalPrincipalDesembolsado,
+      totalInteresesProyectados,
+      totalFianzaGarantias,
+      totalFirmaElectronica,
+      totalGastosCobranza,
+      totalIvaLiquidado,
+      totalFacturacionActiva,
+      plazoPromedioMeses,
+      totalPagosProcesadosCount
     };
   }, [clientUsers]);
 
@@ -320,9 +429,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {
         key: 'ALL_PORTFOLIO',
         label: 'Cartera General',
-        subtitle: 'Control y edición de clientes',
+        subtitle: 'Estadísticas y control',
         icon: Layers,
-        badge: portfolioSummary.totalClients,
+        badge: 'Control',
         allowed:
           isAdmin ||
           hasAccess('VER_CARTERA') ||
@@ -330,20 +439,31 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       },
       {
         key: 'APPROVE_PENDING',
-        label: 'Aprobar / Desembolsos',
-        subtitle: 'Solicitudes y giros bancarios',
+        label: 'Aprobar Cupo',
+        subtitle: 'Cupo inicial $0',
         icon: CheckCircle2,
-        badge:
-          portfolioSummary.pendienteCount + portfolioSummary.enDesembolsoCount,
+        badge: portfolioSummary.pendienteCount,
         allowed:
           isAdmin ||
           hasAccess('APROBAR_CREDITOS') ||
           hasAccess('RECHAZAR_CREDITOS')
       },
       {
+        key: 'APPROVE_DISBURSEMENT',
+        label: 'Aprobar Desembolso',
+        subtitle: 'Cupo y deuda',
+        icon: Briefcase,
+        badge: portfolioSummary.enDesembolsoCount,
+        allowed:
+          isAdmin ||
+          hasAccess('APROBAR_CREDITOS') ||
+          hasAccess('REGISTRAR_PAGOS') ||
+          hasAccess('EDITAR_CLIENTES')
+      },
+      {
         key: 'OVERDUE_COLLECTION',
         label: 'Cobranza y Mora',
-        subtitle: 'Seguimiento de cartera vencida',
+        subtitle: 'Cartera vencida',
         icon: AlertTriangle,
         badge: portfolioSummary.enMoraCount,
         allowed: isAdmin || hasAccess('GESTIONAR_MORA')
@@ -351,7 +471,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {
         key: 'QUICK_PAYMENT',
         label: 'Registrar Abono',
-        subtitle: 'Caja rápida y paz y salvo',
+        subtitle: 'Caja rápida',
         icon: DollarSign,
         badge: 'Caja',
         allowed: isAdmin || hasAccess('REGISTRAR_PAGOS')
@@ -359,7 +479,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {
         key: 'NEW_RECORD',
         label: isAdmin ? 'Crear Usuario' : 'Crear Cliente',
-        subtitle: isAdmin ? 'Alta de clientes y trabajadores' : 'Registro de nuevo cliente',
+        subtitle: 'Nuevo registro',
         icon: UserPlus,
         badge: '+',
         allowed: isAdmin || hasAccess('CREAR_USUARIOS')
@@ -367,23 +487,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {
         key: 'LOAN_POLICIES',
         label: 'Tasas y Cupos',
-        subtitle: 'Intereses, mora, IVA y topes',
+        subtitle: 'Parámetros',
         icon: Sliders,
         badge: `${loanSettings.monthlyInterestRate}%`,
         allowed: isAdmin || hasAccess('CONFIGURAR_SISTEMA')
       },
       {
         key: 'AD_POSTERS',
-        label: 'Posters Publicitarios',
-        subtitle: 'Imagen o URL en dashboard',
+        label: 'Posters',
+        subtitle: 'Publicidad',
         icon: ImageIcon,
         badge: loanSettings.adPosterUrl ? 'Activo' : 'Vacío',
         allowed: isAdmin || hasAccess('CONFIGURAR_SISTEMA')
       },
       {
         key: 'WORKERS_TEAM',
-        label: 'Trabajadores y Accesos',
-        subtitle: 'Permisos y claves del equipo',
+        label: 'Trabajadores',
+        subtitle: 'Accesos',
         icon: Users,
         badge: workerUsers.length,
         allowed: isAdmin // Exclusivo del Administrador
@@ -391,7 +511,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {
         key: 'AUDIT_LEDGER',
         label: 'Auditoría PDF',
-        subtitle: 'Bitácora cifrada y reporte',
+        subtitle: 'Bitácora',
         icon: History,
         badge: auditChain.length,
         allowed: isAdmin || hasAccess('VER_AUDITORIA')
@@ -436,8 +556,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       if (!matchesSearch) return false;
 
       if (activeAction === 'APPROVE_PENDING') {
+        return u.creditStatus === 'PENDIENTE';
+      }
+      if (activeAction === 'APPROVE_DISBURSEMENT') {
         return (
-          u.creditStatus === 'PENDIENTE' ||
           u.paymentStatus === 'EN_DESEMBOLSO' ||
           u.disbursementRequest?.status === 'EN_PROCESO_DESEMBOLSO'
         );
@@ -483,6 +605,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       currency: 'COP',
       maximumFractionDigits: 0
     }).format(Number(val) || 0);
+  };
+
+  const shortText = (val?: string | null, max = 14): string => {
+    if (!val) return '';
+    const clean = String(val).trim();
+    return clean.length > max ? `${clean.slice(0, max)} (***)` : clean;
   };
 
   // Verifica si el usuario actual puede editar un campo específico en la tabla
@@ -670,8 +798,48 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   // ===========================================================================
-  // ACCIONES RÁPIDAS EN 1 CLIC (RESPETANDO EL BLOQUEO DE CRÉDITO ACTIVO)
+  // ACCIONES RÁPIDAS EN 1 CLIC (APROBAR CUPO EN $0 Y APROBAR DESEMBOLSO)
   // ===========================================================================
+  const handleApproveCupoOnly = async (user: User, customCupo?: number) => {
+    if (!isAdmin && !hasAccess('APROBAR_CREDITOS') && !hasAccess('EDITAR_CLIENTES')) {
+      showTransientBanner('amber', 'Sin permiso para aprobar cupo');
+      return;
+    }
+
+    const rawInput = inlineApproveCupo[user.id];
+    const cupoToApprove =
+      customCupo !== undefined
+        ? customCupo
+        : rawInput !== undefined && rawInput.trim() !== ''
+        ? Math.max(0, Number(rawInput.replace(/[^\d]/g, '')) || 0)
+        : user.creditLimit > 0
+        ? user.creditLimit
+        : 10000000;
+
+    const approveRes = await StorageService.approveUserCredit(
+      user.id,
+      cupoToApprove,
+      liveCurrentUser.fullName
+    );
+    if (approveRes.success) {
+      await fintechPanelsEngine.encryptAndBroadcastChange({
+        action: 'CUPO_APPROVED_ZERO_DEBT',
+        userId: user.id,
+        creditLimit: cupoToApprove,
+        initialDebt: 0
+      });
+      await loadWorkspaceData();
+      triggerCellFlash(user.id, 'creditLimit');
+      triggerCellFlash(user.id, 'creditStatus');
+      showTransientBanner(
+        'emerald',
+        `Cupo aprobado (${formatCOP(cupoToApprove)}) iniciando en $0 deuda para ${user.fullName}`
+      );
+    } else {
+      showTransientBanner('coral', approveRes.message);
+    }
+  };
+
   const handleQuickStatusChange = async (
     user: User,
     newCreditStatus: CreditStatus,
@@ -692,25 +860,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       user.creditStatus === 'PENDIENTE' &&
       newCreditStatus === 'ASIGNADO'
     ) {
-      const approveRes = await StorageService.approveUserCredit(
-        user.id,
-        user.creditLimit > 0 ? user.creditLimit : 10000000,
-        liveCurrentUser.fullName
-      );
-      if (approveRes.success) {
-        await fintechPanelsEngine.encryptAndBroadcastChange({
-          action: 'CREDIT_APPROVED_AND_LOCKED',
-          userId: user.id
-        });
-        await loadWorkspaceData();
-        triggerCellFlash(user.id, 'creditStatus');
-        showTransientBanner(
-          'emerald',
-          `Crédito aprobado y fijado para ${user.fullName}`
-        );
-      } else {
-        showTransientBanner('coral', approveRes.message);
-      }
+      await handleApproveCupoOnly(user);
       return;
     }
 
@@ -719,13 +869,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         ? 10000000
         : user.creditLimit;
     const balance =
-      newCreditStatus === 'ASIGNADO' && (!user.availableBalance || user.availableBalance === 0)
-        ? limit
-        : newCreditStatus === 'RECHAZADO'
+      newCreditStatus === 'RECHAZADO'
         ? 0
-        : user.availableBalance;
+        : user.availableBalance || 0;
 
-    const payment = newPaymentStatus || user.paymentStatus || 'AL_DIA';
+    const payment =
+      newCreditStatus === 'RECHAZADO' || balance === 0
+        ? 'PAZ_Y_SALVO'
+        : newPaymentStatus || user.paymentStatus || 'AL_DIA';
     const overdue = payment === 'EN_MORA' ? Math.max(15, user.daysOverdue || 15) : 0;
 
     const res = await StorageService.updateUserCompleteData(
@@ -766,10 +917,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
-  // Confirmar que un crédito firmado con OTP ya fue desembolsado (Personal o API Bancaria)
+  // Aprobar Desembolso: Disminuye el cupo disponible y carga el valor como deuda en el panel del cliente
   const handleConfirmDisbursement = async (
     user: User,
-    source: 'STAFF' | 'BANK_API'
+    source: 'STAFF' | 'BANK_API',
+    customPrincipalOverride?: number
   ) => {
     if (
       !isAdmin &&
@@ -777,9 +929,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       !hasAccess('REGISTRAR_PAGOS') &&
       !hasAccess('EDITAR_CLIENTES')
     ) {
-      showTransientBanner('amber', 'Sin permiso para confirmar desembolsos');
+      showTransientBanner('amber', 'Sin permiso para aprobar desembolsos');
       return;
     }
+
+    const rawCustom = inlineDisbursementPrincipal[user.id];
+    const principalToDisburse =
+      customPrincipalOverride !== undefined
+        ? customPrincipalOverride
+        : rawCustom !== undefined && rawCustom.trim() !== ''
+        ? Math.max(100000, Number(rawCustom.replace(/[^\d]/g, '')) || 0)
+        : undefined;
 
     const labelSource =
       source === 'BANK_API'
@@ -790,21 +950,42 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
     const res = await StorageService.confirmLoanDisbursement(
       user.id,
-      labelSource
+      labelSource,
+      principalToDisburse
     );
     if (res.success) {
       await fintechPanelsEngine.encryptAndBroadcastChange({
-        action: 'DISBURSEMENT_CONFIRMED',
+        action: 'DISBURSEMENT_APPROVED_CUPO_DECREASED_DEBT_CHARGED',
         userId: user.id,
         confirmedBy: labelSource
       });
       await loadWorkspaceData();
       triggerCellFlash(user.id, 'availableBalance');
       triggerCellFlash(user.id, 'paymentStatus');
-      showTransientBanner(
-        'emerald',
-        `Desembolso confirmado (${labelSource}) para ${user.fullName}`
-      );
+      showTransientBanner('emerald', res.message);
+    } else {
+      showTransientBanner('coral', res.message);
+    }
+  };
+
+  const handleRejectDisbursement = async (user: User) => {
+    if (!isAdmin && !hasAccess('RECHAZAR_CREDITOS') && !hasAccess('APROBAR_CREDITOS')) {
+      showTransientBanner('amber', 'Sin permiso para rechazar desembolsos');
+      return;
+    }
+
+    const res = await StorageService.rejectLoanDisbursement(
+      user.id,
+      'Solicitud de desembolso rechazada en revisión administrativa',
+      liveCurrentUser.fullName
+    );
+    if (res.success) {
+      await fintechPanelsEngine.encryptAndBroadcastChange({
+        action: 'DISBURSEMENT_REJECTED_CUPO_RESTORED',
+        userId: user.id
+      });
+      await loadWorkspaceData();
+      showTransientBanner('amber', res.message);
     } else {
       showTransientBanner('coral', res.message);
     }
@@ -1228,7 +1409,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return;
     }
 
-    // Crear el cliente inicialmente en estado PENDIENTE y enseguida fijar su crédito con los 8 componentes
+    // Crear el cliente inicialmente en estado PENDIENTE
     const reg = await StorageService.registerUser({
       cedula: newCedula.trim(),
       fullName: newFullName.trim(),
@@ -1240,33 +1421,47 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     });
 
     if (reg.success && reg.user) {
-      await StorageService.createAndLockClientCredit(
-        reg.user.id,
-        {
-          principalAmount: previewNewClientBreakdown.principalAmount,
-          termMonths: previewNewClientBreakdown.termMonths,
-          interestRatePercentage: previewNewClientBreakdown.interestRatePercentage,
-          fianzaPercentage: previewNewClientBreakdown.fianzaPercentage,
-          electronicSignatureFee: previewNewClientBreakdown.electronicSignatureFee,
-          collectionExpenses: previewNewClientBreakdown.collectionExpenses,
-          ivaPercentage: previewNewClientBreakdown.ivaPercentage,
-          paymentDeadline: previewNewClientBreakdown.paymentDeadline
-        },
-        liveCurrentUser.fullName
-      );
+      const initialDebtRequested = Number(newDebt) || 0;
+      if (initialDebtRequested > 0) {
+        await StorageService.createAndLockClientCredit(
+          reg.user.id,
+          {
+            principalAmount: previewNewClientBreakdown.principalAmount,
+            termMonths: previewNewClientBreakdown.termMonths,
+            interestRatePercentage: previewNewClientBreakdown.interestRatePercentage,
+            fianzaPercentage: previewNewClientBreakdown.fianzaPercentage,
+            electronicSignatureFee: previewNewClientBreakdown.electronicSignatureFee,
+            collectionExpenses: previewNewClientBreakdown.collectionExpenses,
+            ivaPercentage: previewNewClientBreakdown.ivaPercentage,
+            paymentDeadline: previewNewClientBreakdown.paymentDeadline
+          },
+          liveCurrentUser.fullName
+        );
+      } else {
+        await StorageService.approveUserCredit(
+          reg.user.id,
+          Number(newLimit) || 10000000,
+          liveCurrentUser.fullName
+        );
+      }
       setNewCedula('');
       setNewFullName('');
       setNewEmail('');
       setNewPhone('');
       await fintechPanelsEngine.encryptAndBroadcastChange({
-        action: 'INLINE_CLIENT_CREATED_AND_LOCKED',
+        action:
+          initialDebtRequested > 0
+            ? 'INLINE_CLIENT_CREATED_AND_LOCKED'
+            : 'INLINE_CLIENT_CUPO_APPROVED_ZERO_DEBT',
         cedula: reg.user.cedula
       });
       await loadWorkspaceData();
-      setActiveAction('ALL_PORTFOLIO');
+      setActiveAction(initialDebtRequested > 0 ? 'APPROVE_DISBURSEMENT' : 'APPROVE_PENDING');
       showTransientBanner(
         'emerald',
-        `Cliente creado con crédito fijado e inmutable: ${reg.user.fullName}`
+        initialDebtRequested > 0
+          ? `Cliente creado con desembolso activo: ${reg.user.fullName}`
+          : `Cliente creado con Cupo habilitado (${formatCOP(Number(newLimit) || 10000000)}) iniciando en $0 deuda: ${reg.user.fullName}`
       );
     } else {
       showTransientBanner('coral', reg.message);
@@ -1414,11 +1609,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 </span>
               )}
             </div>
-            <div className="text-[11px] text-purple-200 mt-0.5">
-              {liveCurrentUser.fullName} ({liveCurrentUser.cedula})
+            <div className="text-[11px] text-purple-200 mt-0.5" title={liveCurrentUser.fullName}>
+              {shortText(liveCurrentUser.fullName, 14)} ({liveCurrentUser.cedula})
               {isWorker && (
                 <span className="ml-2 text-teal-200 font-semibold">
-                  • {(liveCurrentUser.workerPermissions || []).length} bloques habilitados
+                  • {(liveCurrentUser.workerPermissions || []).length} módulos
                 </span>
               )}
             </div>
@@ -1521,13 +1716,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           {/* Resumen vertical consolidado en la parte inferior de la barra izquierda */}
           <div className="mt-2 pt-3 border-t border-slate-200 space-y-2">
             <div className="px-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
-              Resumen de Cartera
+              Medición de Plataforma
             </div>
             <div className="bg-slate-50 border border-slate-200 p-2.5 space-y-2 text-xs">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] text-slate-500">Cupo Total</span>
                 <span className="font-mono font-bold text-purple-700">
                   {formatCOP(portfolioSummary.totalCupo)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-slate-500">Disminución Cupo</span>
+                <span className="font-mono font-bold text-amber-700">
+                  -{formatCOP(portfolioSummary.totalCupoDisminuido)}
                 </span>
               </div>
               <div className="flex items-center justify-between">
@@ -1557,58 +1758,59 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           <section className="fintech-kpi-strip">
             <div className="fintech-kpi-cell">
               <div className="flex items-center justify-between">
-                <span className="fintech-kpi-label">Total Clientes</span>
+                <span className="fintech-kpi-label">Control de Clientes</span>
                 <span className="status-tag emerald">
-                  {portfolioSummary.alDiaCount} Al Día
+                  {portfolioSummary.cupoEnCeroDeudaCount} en $0 Deuda
                 </span>
               </div>
               <span className="fintech-kpi-value">{portfolioSummary.totalClients}</span>
               <span className="text-[11px] text-slate-500">
-                Cartera registrada en plataforma
+                {portfolioSummary.activosConDeudaCount} con desembolso activo · {portfolioSummary.alDiaCount} al día
               </span>
             </div>
 
             <div className="fintech-kpi-cell">
               <div className="flex items-center justify-between">
-                <span className="fintech-kpi-label">Atención Prioritaria</span>
+                <span className="fintech-kpi-label">Aprobaciones en Cola</span>
                 <span className="status-tag amber">
-                  {portfolioSummary.pendienteCount + portfolioSummary.enDesembolsoCount}{' '}
-                  Por Aprobar
+                  {portfolioSummary.pendienteCount} Cupo · {portfolioSummary.enDesembolsoCount} Giro
                 </span>
               </div>
-              <span className="fintech-kpi-value text-rose-600">
-                {portfolioSummary.enMoraCount} en Mora
+              <span className="fintech-kpi-value text-purple-700">
+                {portfolioSummary.pendienteCount + portfolioSummary.enDesembolsoCount} Solicitudes
               </span>
               <span className="text-[11px] text-slate-500">
-                {portfolioSummary.enDesembolsoCount} en proceso de desembolso
+                {portfolioSummary.enMoraCount} clientes en cobranza / mora
               </span>
             </div>
 
             <div className="fintech-kpi-cell">
               <div className="flex items-center justify-between">
-                <span className="fintech-kpi-label">Deuda Activa en Calle</span>
-                <span className="status-tag cyan">Cupo Asignado</span>
+                <span className="fintech-kpi-label">Deuda Activa y Cupos</span>
+                <span className="status-tag cyan">
+                  Uso: {portfolioSummary.utilizacionCupoPercent}%
+                </span>
               </div>
               <span className="fintech-kpi-value text-slate-900">
                 {formatCOP(portfolioSummary.totalDeuda)}
               </span>
               <span className="text-[11px] font-mono text-purple-700 font-semibold">
-                Cupo Total: {formatCOP(portfolioSummary.totalCupo)}
+                Cupo Disp: {formatCOP(portfolioSummary.totalCupoDisponible)} / {formatCOP(portfolioSummary.totalCupo)}
               </span>
             </div>
 
             <div className="fintech-kpi-cell">
               <div className="flex items-center justify-between">
-                <span className="fintech-kpi-label">Capital Recaudado</span>
+                <span className="fintech-kpi-label">Recaudo y Recuperación</span>
                 <span className="status-tag teal">
-                  {loanSettings.monthlyInterestRate}% EM
+                  {portfolioSummary.tasaRecuperacion}% Recup.
                 </span>
               </div>
               <span className="fintech-kpi-value text-emerald-700">
                 {formatCOP(portfolioSummary.totalRecaudado)}
               </span>
               <span className="text-[11px] font-mono text-slate-500">
-                Mora {loanSettings.lateFeePercentage}% · IVA {loanSettings.taxPercentage}%
+                Tasa {loanSettings.monthlyInterestRate}% · Mora {loanSettings.lateFeePercentage}% · IVA {loanSettings.taxPercentage}%
               </span>
             </div>
           </section>
@@ -1627,36 +1829,1061 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             <>
               {/* ENCABEZADO DEL BLOQUE ACTIVO */}
               {activeActionMeta && (
-                <div className="bg-white border border-slate-200 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
+                <div className="bg-white border border-slate-200 px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5">
                     <div
-                      className={`w-8 h-8 flex items-center justify-center text-white font-bold ${
+                      className={`w-7 h-7 flex items-center justify-center text-white font-bold ${
                         isAdmin ? 'bg-purple-700' : 'bg-teal-600'
                       }`}
                     >
-                      <activeActionMeta.icon className="w-4 h-4" />
+                      <activeActionMeta.icon className="w-3.5 h-3.5" />
                     </div>
                     <div>
                       <h2 className="text-sm font-extrabold text-slate-900 leading-tight">
                         {activeActionMeta.label}
                       </h2>
-                      <p className="text-xs text-slate-500">
+                      <p className="text-[11px] text-slate-500">
                         {activeActionMeta.subtitle}
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className={`status-tag ${isAdmin ? 'cyan' : 'teal'}`}>
-                      Bloque Activo: {activeActionMeta.badge}
-                    </span>
+                  <span className={`status-tag ${isAdmin ? 'cyan' : 'teal'}`}>
+                    {activeActionMeta.badge}
+                  </span>
+                </div>
+              )}
+
+              {/* =================================================================
+                  ACCIÓN 1: CARTERA GENERAL (SOLO ESTADÍSTICAS, INFORMES Y CONTROL)
+                 ================================================================= */}
+              {activeAction === 'ALL_PORTFOLIO' && (
+                <div className="space-y-4 action-panel-slide">
+                  <div className="bg-white border border-slate-200 p-3.5 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="status-tag cyan">ESTADÍSTICAS Y CONTROL</span>
+                      <span
+                        className={`status-tag ${
+                          isChainValid && isRegulatoryCompliant ? 'emerald' : 'coral'
+                        }`}
+                      >
+                        {isChainValid && isRegulatoryCompliant
+                          ? 'SHA-256 OK'
+                          : 'Alerta'}
+                      </span>
+                      <h3 className="text-xs font-extrabold text-slate-900">
+                        Medición General
+                      </h3>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setActiveAction('APPROVE_PENDING')}
+                        className="px-2.5 py-1 bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-200 text-xs font-bold cursor-pointer"
+                      >
+                        Aprobar Cupo ({portfolioSummary.pendienteCount})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveAction('APPROVE_DISBURSEMENT')}
+                        className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold cursor-pointer"
+                      >
+                        Aprobar Desembolso ({portfolioSummary.enDesembolsoCount})
+                      </button>
+                      {(isAdmin || hasAccess('VER_AUDITORIA')) && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            exportAuditTrailToProtectedPDF(
+                              auditChain,
+                              isChainValid,
+                              liveCurrentUser.fullName
+                            )
+                          }
+                          className="px-2.5 py-1 bg-purple-700 hover:bg-purple-800 text-white text-xs font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <FileDown className="w-3.5 h-3.5" />
+                          <span>Informe PDF</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* SECCIÓN 1: MEDICIÓN DE CUPOS, DISMINUCIÓN Y ENDEUDAMIENTO */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div className="bg-white border border-slate-200 p-3.5 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold uppercase text-slate-500">
+                          Cupo Total
+                        </span>
+                        <span className="status-tag cyan">Global</span>
+                      </div>
+                      <div className="text-lg font-mono font-extrabold text-purple-700">
+                        {formatCOP(portfolioSummary.totalCupo)}
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        {portfolioSummary.totalClients} clientes
+                      </p>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 p-3.5 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold uppercase text-slate-500">
+                          Disminución Cupo
+                        </span>
+                        <span className="status-tag amber">
+                          {portfolioSummary.utilizacionCupoPercent}% Uso
+                        </span>
+                      </div>
+                      <div className="text-lg font-mono font-extrabold text-amber-700">
+                        -{formatCOP(portfolioSummary.totalCupoDisminuido)}
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        Disp: {formatCOP(portfolioSummary.totalCupoDisponible)}
+                      </p>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 p-3.5 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold uppercase text-slate-500">
+                          Deuda Total
+                        </span>
+                        <span className="status-tag coral">
+                          {portfolioSummary.activosConDeudaCount} Activos
+                        </span>
+                      </div>
+                      <div className="text-lg font-mono font-extrabold text-slate-900">
+                        {formatCOP(portfolioSummary.totalDeuda)}
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        En cobro
+                      </p>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 p-3.5 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold uppercase text-slate-500">
+                          Recaudo
+                        </span>
+                        <span className="status-tag emerald">
+                          {portfolioSummary.tasaRecuperacion}%
+                        </span>
+                      </div>
+                      <div className="text-lg font-mono font-extrabold text-emerald-700">
+                        {formatCOP(portfolioSummary.totalRecaudado)}
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        {portfolioSummary.totalPagosProcesadosCount} abonos
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* SECCIÓN 2: DISTRIBUCIÓN E INFORME CONTABLE */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div className="bg-white border border-slate-200 p-4 space-y-2.5">
+                      <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                        <h4 className="text-xs font-extrabold uppercase text-slate-900">
+                          Estados de Cartera
+                        </h4>
+                        <span className="status-tag cyan">
+                          {portfolioSummary.totalClients} Total
+                        </span>
+                      </div>
+
+                      <div className="space-y-2 text-xs">
+                        {[
+                          {
+                            label: 'Pendientes Cupo',
+                            count: portfolioSummary.pendienteCount,
+                            color: 'bg-amber-500'
+                          },
+                          {
+                            label: 'Cupo $0 Deuda',
+                            count: portfolioSummary.cupoEnCeroDeudaCount,
+                            color: 'bg-teal-600'
+                          },
+                          {
+                            label: 'Por Desembolsar',
+                            count: portfolioSummary.enDesembolsoCount,
+                            color: 'bg-purple-600'
+                          },
+                          {
+                            label: 'Activos Al Día',
+                            count: Math.max(
+                              0,
+                              portfolioSummary.activosConDeudaCount - portfolioSummary.enMoraCount
+                            ),
+                            color: 'bg-emerald-600'
+                          },
+                          {
+                            label: 'En Mora',
+                            count: portfolioSummary.enMoraCount,
+                            color: 'bg-rose-600'
+                          },
+                          {
+                            label: 'Rechazados',
+                            count: portfolioSummary.rechazadoCount,
+                            color: 'bg-slate-400'
+                          }
+                        ].map((row, i) => {
+                          const pct =
+                            portfolioSummary.totalClients > 0
+                              ? Math.round((row.count / portfolioSummary.totalClients) * 100)
+                              : 0;
+                          return (
+                            <div key={i} className="space-y-1">
+                              <div className="flex items-center justify-between">
+                                <span className="font-semibold text-slate-700">
+                                  {row.label}
+                                </span>
+                                <span className="font-mono font-bold text-slate-900">
+                                  {row.count} ({pct}%)
+                                </span>
+                              </div>
+                              <div className="w-full h-1.5 bg-slate-100 border border-slate-200 overflow-hidden">
+                                <div
+                                  className={`h-full ${row.color}`}
+                                  style={{ width: `${Math.max(pct, row.count > 0 ? 6 : 0)}%` }}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 p-4 space-y-2.5">
+                      <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                        <h4 className="text-xs font-extrabold uppercase text-slate-900">
+                          Consolidado Contable
+                        </h4>
+                        <span className="status-tag emerald">Activo</span>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                        <div className="p-2 bg-slate-50 border border-slate-200 flex items-center justify-between">
+                          <span className="text-slate-600">Capital:</span>
+                          <span className="font-mono font-bold text-slate-900">
+                            {formatCOP(portfolioSummary.totalPrincipalDesembolsado)}
+                          </span>
+                        </div>
+                        <div className="p-2 bg-slate-50 border border-slate-200 flex items-center justify-between">
+                          <span className="text-slate-600">Plazo Prom.:</span>
+                          <span className="font-mono font-bold text-purple-700">
+                            {portfolioSummary.plazoPromedioMeses}m
+                          </span>
+                        </div>
+                        <div className="p-2 bg-slate-50 border border-slate-200 flex items-center justify-between">
+                          <span className="text-slate-600">
+                            Interés ({loanSettings.monthlyInterestRate}%):
+                          </span>
+                          <span className="font-mono font-bold text-slate-900">
+                            {formatCOP(portfolioSummary.totalInteresesProyectados)}
+                          </span>
+                        </div>
+                        <div className="p-2 bg-slate-50 border border-slate-200 flex items-center justify-between">
+                          <span className="text-slate-600">
+                            Fianza ({loanSettings.fianzaPercentage ?? 3.5}%):
+                          </span>
+                          <span className="font-mono font-bold text-slate-900">
+                            {formatCOP(portfolioSummary.totalFianzaGarantias)}
+                          </span>
+                        </div>
+                        <div className="p-2 bg-slate-50 border border-slate-200 flex items-center justify-between">
+                          <span className="text-slate-600">Firma Elec.:</span>
+                          <span className="font-mono font-bold text-slate-900">
+                            {formatCOP(portfolioSummary.totalFirmaElectronica)}
+                          </span>
+                        </div>
+                        <div className="p-2 bg-slate-50 border border-slate-200 flex items-center justify-between">
+                          <span className="text-slate-600">Cobranza:</span>
+                          <span className="font-mono font-bold text-rose-700">
+                            {formatCOP(portfolioSummary.totalGastosCobranza)}
+                          </span>
+                        </div>
+                        <div className="p-2 bg-slate-50 border border-slate-200 flex items-center justify-between">
+                          <span className="text-slate-600">
+                            IVA ({loanSettings.taxPercentage}%):
+                          </span>
+                          <span className="font-mono font-bold text-slate-900">
+                            {formatCOP(portfolioSummary.totalIvaLiquidado)}
+                          </span>
+                        </div>
+                        <div className="p-2 bg-purple-50 border border-purple-200 flex items-center justify-between">
+                          <span className="font-bold text-purple-900">
+                            Total Facturado:
+                          </span>
+                          <span className="font-mono font-extrabold text-purple-900">
+                            {formatCOP(portfolioSummary.totalFacturacionActiva)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* SECCIÓN 3: INDICADORES DE RIESGO */}
+                  <div className="bg-white border border-slate-200 p-4 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2">
+                      <h4 className="text-xs font-extrabold uppercase text-slate-900">
+                        Control y Riesgo
+                      </h4>
+                      <span className="text-[11px] font-mono text-slate-500">
+                        SHA-256: {auditChain.length} · Logs: {regulatoryLogs.length}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                      <div className="p-2.5 bg-slate-50 border border-slate-200 space-y-0.5">
+                        <span className="text-[10px] font-bold uppercase text-slate-500">
+                          Morosidad
+                        </span>
+                        <div
+                          className={`text-sm font-mono font-extrabold ${
+                            portfolioSummary.indiceMorosidad > 20
+                              ? 'text-rose-600'
+                              : 'text-emerald-700'
+                          }`}
+                        >
+                          {portfolioSummary.indiceMorosidad}% ({portfolioSummary.enMoraCount}/{portfolioSummary.activosConDeudaCount})
+                        </div>
+                      </div>
+
+                      <div className="p-2.5 bg-slate-50 border border-slate-200 space-y-0.5">
+                        <span className="text-[10px] font-bold uppercase text-slate-500">
+                          Uso de Cupos
+                        </span>
+                        <div className="text-sm font-mono font-extrabold text-purple-700">
+                          {portfolioSummary.utilizacionCupoPercent}%
+                        </div>
+                      </div>
+
+                      <div className="p-2.5 bg-slate-50 border border-slate-200 space-y-0.5">
+                        <span className="text-[10px] font-bold uppercase text-slate-500">
+                          Límites
+                        </span>
+                        <div className="text-sm font-mono font-extrabold text-slate-900">
+                          {formatCOP(loanSettings.minLoanAmount)} - {formatCOP(loanSettings.maxLoanAmount)}
+                        </div>
+                      </div>
+
+                      <div className="p-2.5 bg-slate-50 border border-slate-200 space-y-0.5">
+                        <span className="text-[10px] font-bold uppercase text-slate-500">
+                          Operadores
+                        </span>
+                        <div className="text-sm font-mono font-extrabold text-teal-700">
+                          {workerUsers.length} Activos
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
 
-              {/* ACCIONES 1, 2 y 3: MATRIZ DE CARTERA / APROBAR / COBRANZA */}
-              {(activeAction === 'ALL_PORTFOLIO' ||
-                activeAction === 'APPROVE_PENDING' ||
-                activeAction === 'OVERDUE_COLLECTION') && (
+              {/* =================================================================
+                  ACCIÓN 2: APROBAR CUPO ($0 DEUDA)
+                 ================================================================= */}
+              {activeAction === 'APPROVE_PENDING' && (
+                <div className="space-y-4 action-panel-slide">
+                  <div className="bg-purple-50 border border-purple-200 px-4 py-2.5 flex flex-col md:flex-row md:items-center justify-between gap-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="status-tag cyan">APROBAR CUPO</span>
+                      <span className="status-tag emerald">INICIA EN $0</span>
+                    </div>
+                    <div className="relative w-full md:w-64 shrink-0">
+                      <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={e => setSearchQuery(e.target.value)}
+                        placeholder="Buscar..."
+                        className="bg-white border border-purple-300 text-slate-900 text-xs pl-8 pr-3 py-1.5 w-full focus:border-purple-700 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Tabla de Usuarios Pendientes por Aprobar Cupo */}
+                  <div className="bg-white border border-slate-200">
+                    <div className="px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
+                      <h4 className="text-xs font-extrabold uppercase text-slate-900">
+                        Pendientes de Cupo ({filteredClients.length})
+                      </h4>
+                      <span className="status-tag amber">
+                        {filteredClients.length} pendientes
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="fintech-DataMatrix">
+                        <thead>
+                          <tr>
+                            <th>Cliente</th>
+                            <th>Contacto</th>
+                            <th>Estado</th>
+                            <th>Cupo (COP)</th>
+                            <th>Deuda</th>
+                            <th className="text-right">Acción</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredClients.length === 0 ? (
+                            <tr>
+                              <td colSpan={6} className="text-center py-6 text-xs text-slate-400">
+                                Sin pendientes.
+                              </td>
+                            </tr>
+                          ) : (
+                            filteredClients.map(user => {
+                              const currentCupoVal =
+                                inlineApproveCupo[user.id] !== undefined
+                                  ? inlineApproveCupo[user.id]
+                                  : String(user.creditLimit > 0 ? user.creditLimit : 10000000);
+
+                              return (
+                                <tr key={user.id}>
+                                  <td>
+                                    <div
+                                      className="font-bold text-slate-900 text-xs"
+                                      title={user.fullName}
+                                    >
+                                      {shortText(user.fullName, 14)}
+                                    </div>
+                                    <div className="text-[11px] font-mono text-slate-500">
+                                      CC {user.cedula}
+                                    </div>
+                                  </td>
+                                  <td>
+                                    <div className="text-xs text-slate-700">{user.phone}</div>
+                                    <div
+                                      className="text-[11px] text-slate-400"
+                                      title={user.email}
+                                    >
+                                      {shortText(user.email, 14)}
+                                    </div>
+                                  </td>
+                                  <td>
+                                    <span className="status-tag amber">PENDIENTE</span>
+                                  </td>
+                                  <td>
+                                    <div className="space-y-1 max-w-[210px]">
+                                      <input
+                                        type="number"
+                                        min={500000}
+                                        step={500000}
+                                        value={currentCupoVal}
+                                        onChange={e =>
+                                          setInlineApproveCupo(prev => ({
+                                            ...prev,
+                                            [user.id]: e.target.value
+                                          }))
+                                        }
+                                        className="inline-cell-input font-mono font-bold text-purple-800"
+                                      />
+                                      <div className="flex flex-wrap gap-1">
+                                        {[5000000, 10000000, 15000000, 20000000].map(preset => (
+                                          <button
+                                            key={preset}
+                                            type="button"
+                                            onClick={() =>
+                                              setInlineApproveCupo(prev => ({
+                                                ...prev,
+                                                [user.id]: String(preset)
+                                              }))
+                                            }
+                                            className="px-1.5 py-0.5 text-[10px] font-mono bg-slate-100 hover:bg-purple-100 text-slate-700 border border-slate-200 cursor-pointer"
+                                          >
+                                            {formatCOP(preset)}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  </td>
+                                  <td>
+                                    <span className="status-tag emerald font-mono">$0</span>
+                                  </td>
+                                  <td className="text-right">
+                                    <div className="flex items-center justify-end gap-1.5">
+                                      {hasAccess('APROBAR_CREDITOS') && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleApproveCupoOnly(user)}
+                                          className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold cursor-pointer"
+                                        >
+                                          Aprobar Cupo
+                                        </button>
+                                      )}
+                                      {hasAccess('RECHAZAR_CREDITOS') && (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            handleQuickStatusChange(user, 'RECHAZADO')
+                                          }
+                                          className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold cursor-pointer"
+                                        >
+                                          Rechazar
+                                        </button>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Personas que ya tienen Cupo Aprobado e inician en $0 Deuda */}
+                  <div className="bg-white border border-slate-200">
+                    <div className="px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
+                      <h4 className="text-xs font-extrabold uppercase text-slate-900">
+                        Cupos en $0 ({portfolioSummary.cupoEnCeroDeudaCount})
+                      </h4>
+                      <span className="status-tag teal">
+                        {portfolioSummary.cupoEnCeroDeudaCount} en $0
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="fintech-DataMatrix">
+                        <thead>
+                          <tr>
+                            <th>Cliente</th>
+                            <th>Cupo</th>
+                            <th>Deuda</th>
+                            <th>Nuevo Cupo</th>
+                            <th className="text-right">Acción</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {clientUsers.filter(
+                            u =>
+                              u.creditStatus === 'ASIGNADO' &&
+                              (u.availableBalance || 0) === 0 &&
+                              u.paymentStatus !== 'EN_DESEMBOLSO' &&
+                              u.disbursementRequest?.status !== 'EN_PROCESO_DESEMBOLSO'
+                          ).length === 0 ? (
+                            <tr>
+                              <td colSpan={5} className="text-center py-6 text-xs text-slate-400">
+                                Sin registros.
+                              </td>
+                            </tr>
+                          ) : (
+                            clientUsers
+                              .filter(
+                                u =>
+                                  u.creditStatus === 'ASIGNADO' &&
+                                  (u.availableBalance || 0) === 0 &&
+                                  u.paymentStatus !== 'EN_DESEMBOLSO' &&
+                                  u.disbursementRequest?.status !== 'EN_PROCESO_DESEMBOLSO'
+                              )
+                              .map(user => {
+                                const cupoEditVal =
+                                  inlineApproveCupo[user.id] !== undefined
+                                    ? inlineApproveCupo[user.id]
+                                    : String(user.creditLimit || 10000000);
+                                return (
+                                  <tr key={user.id}>
+                                    <td>
+                                      <div
+                                        className="font-bold text-slate-900 text-xs"
+                                        title={user.fullName}
+                                      >
+                                        {shortText(user.fullName, 14)}
+                                      </div>
+                                      <div className="text-[11px] font-mono text-slate-500">
+                                        CC {user.cedula}
+                                      </div>
+                                    </td>
+                                    <td className="font-mono font-bold text-purple-700 text-xs">
+                                      {formatCOP(user.creditLimit)}
+                                    </td>
+                                    <td>
+                                      <span className="status-tag emerald font-mono">$0</span>
+                                    </td>
+                                    <td>
+                                      <input
+                                        type="number"
+                                        min={500000}
+                                        step={500000}
+                                        value={cupoEditVal}
+                                        onChange={e =>
+                                          setInlineApproveCupo(prev => ({
+                                            ...prev,
+                                            [user.id]: e.target.value
+                                          }))
+                                        }
+                                        className="inline-cell-input font-mono max-w-[160px]"
+                                      />
+                                    </td>
+                                    <td className="text-right">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleApproveCupoOnly(user)}
+                                        className="px-2.5 py-1.5 bg-purple-700 hover:bg-purple-800 text-white text-xs font-bold cursor-pointer"
+                                      >
+                                        Actualizar
+                                      </button>
+                                    </td>
+                                  </tr>
+                                );
+                              })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* =================================================================
+                  ACCIÓN 3: APROBAR DESEMBOLSO (DISMINUCIÓN CUPO + DEUDA)
+                 ================================================================= */}
+              {activeAction === 'APPROVE_DISBURSEMENT' && (
+                <div className="space-y-4 action-panel-slide">
+                  <div className="bg-amber-50 border border-amber-200 px-4 py-2.5 flex flex-col md:flex-row md:items-center justify-between gap-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="status-tag amber">APROBAR DESEMBOLSO</span>
+                      <span className="status-tag coral">CUPO Y DEUDA</span>
+                    </div>
+                    <div className="relative w-full md:w-64 shrink-0">
+                      <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={e => setSearchQuery(e.target.value)}
+                        placeholder="Buscar..."
+                        className="bg-white border border-amber-300 text-slate-900 text-xs pl-8 pr-3 py-1.5 w-full focus:border-purple-700 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Solicitudes de Desembolso Pendientes de Aprobar */}
+                  <div className="bg-white border border-slate-200">
+                    <div className="px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
+                      <h4 className="text-xs font-extrabold uppercase text-slate-900">
+                        Solicitudes de Desembolso ({filteredClients.length})
+                      </h4>
+                      <span className="status-tag amber">
+                        {filteredClients.length} en cola
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="fintech-DataMatrix">
+                        <thead>
+                          <tr>
+                            <th>Cliente</th>
+                            <th>Cuenta / OTP</th>
+                            <th>Cupo</th>
+                            <th>Desembolso</th>
+                            <th>Deuda</th>
+                            <th className="text-right">Acción</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredClients.length === 0 ? (
+                            <tr>
+                              <td colSpan={6} className="text-center py-8 text-xs text-slate-400">
+                                No hay solicitudes de desembolso pendientes en este momento.
+                              </td>
+                            </tr>
+                          ) : (
+                            filteredClients.map(user => {
+                              const requestedPrincipal =
+                                user.disbursementRequest?.requestedAmount ||
+                                user.loanBreakdown?.principalAmount ||
+                                user.creditLimit ||
+                                10000000;
+                              const customPrincipalStr =
+                                inlineDisbursementPrincipal[user.id] !== undefined
+                                  ? inlineDisbursementPrincipal[user.id]
+                                  : String(requestedPrincipal);
+                              const effectivePrincipal = Math.max(
+                                100000,
+                                Number(customPrincipalStr) || requestedPrincipal
+                              );
+                              const effectiveCupo = Math.max(
+                                Number(user.creditLimit) || 0,
+                                effectivePrincipal
+                              );
+                              const cupoRestante = Math.max(0, effectiveCupo - effectivePrincipal);
+
+                              const previewBreakdown = StorageService.buildFixedLoanBreakdown({
+                                principalAmount: effectivePrincipal,
+                                termMonths:
+                                  user.disbursementRequest?.termMonths ||
+                                  user.loanTermMonths ||
+                                  12,
+                                interestRatePercentage:
+                                  user.interestRateApplied ?? loanSettings.monthlyInterestRate,
+                                fianzaPercentage: loanSettings.fianzaPercentage ?? 3.5,
+                                electronicSignatureFee:
+                                  loanSettings.electronicSignatureFee ?? 28500,
+                                collectionExpenses: 0,
+                                ivaPercentage:
+                                  user.taxPercentageApplied ?? loanSettings.taxPercentage,
+                                paymentDeadline:
+                                  user.nextPaymentDate || 'Día 05 (2026-11-05)'
+                              });
+
+                              return (
+                                <tr key={user.id} className="bg-amber-50/30">
+                                  <td>
+                                    <div className="font-bold text-slate-900 text-xs">
+                                      {user.fullName}
+                                    </div>
+                                    <div className="text-[11px] font-mono text-slate-500">
+                                      CC {user.cedula} · {user.creditTramiteId || `TRM-${user.cedula.slice(-4)}`}
+                                    </div>
+                                    <div className="text-[10px] text-slate-500 mt-0.5">
+                                      Deuda actual antes de aprobar: <strong>$0 COP</strong>
+                                    </div>
+                                  </td>
+                                  <td>
+                                    {user.disbursementRequest ? (
+                                      <div className="space-y-0.5 text-xs">
+                                        <div className="font-bold text-slate-800">
+                                          {user.disbursementRequest.bankEntity} ({user.disbursementRequest.accountType})
+                                        </div>
+                                        <div className="font-mono text-[11px] text-slate-600">
+                                          Cta: {user.disbursementRequest.accountNumber}
+                                        </div>
+                                        <div className="text-[10px] font-mono text-emerald-700">
+                                          OTP #{user.disbursementRequest.otpCodeUsed} ·{' '}
+                                          {user.disbursementRequest.termMonths} meses
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <span className="text-xs text-slate-500">
+                                        Giro directo administrativo
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td>
+                                    <div className="font-mono font-bold text-purple-700 text-xs">
+                                      {formatCOP(effectiveCupo)}
+                                    </div>
+                                    <div className="text-[10px] text-slate-500">
+                                      Cupo total del cliente
+                                    </div>
+                                  </td>
+                                  <td>
+                                    <div className="space-y-1 max-w-[200px]">
+                                      <input
+                                        type="number"
+                                        min={100000}
+                                        max={effectiveCupo}
+                                        step={100000}
+                                        value={customPrincipalStr}
+                                        onChange={e =>
+                                          setInlineDisbursementPrincipal(prev => ({
+                                            ...prev,
+                                            [user.id]: e.target.value
+                                          }))
+                                        }
+                                        className="inline-cell-input font-mono font-bold text-amber-900"
+                                      />
+                                      <div className="text-[10px] font-mono text-rose-700 font-bold">
+                                        Disminución cupo: -{formatCOP(effectivePrincipal)}
+                                      </div>
+                                      <div className="text-[10px] font-mono text-emerald-700">
+                                        Cupo disponible restante: {formatCOP(cupoRestante)}
+                                      </div>
+                                    </div>
+                                  </td>
+                                  <td>
+                                    <div className="font-mono font-extrabold text-slate-900 text-xs">
+                                      {formatCOP(previewBreakdown.totalPaymentAmount)}
+                                    </div>
+                                    <div className="text-[10px] font-mono text-purple-700 font-semibold">
+                                      Cuota: {formatCOP(previewBreakdown.monthlyInstallment)} / mes
+                                    </div>
+                                    <div className="text-[10px] text-slate-500">
+                                      Incluye capital + interés + fianza + firma + IVA
+                                    </div>
+                                  </td>
+                                  <td className="text-right">
+                                    <div className="flex flex-col sm:flex-row items-end sm:items-center justify-end gap-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleConfirmDisbursement(
+                                            user,
+                                            'STAFF',
+                                            effectivePrincipal
+                                          )
+                                        }
+                                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold cursor-pointer whitespace-nowrap"
+                                      >
+                                        Aprobar Desembolso
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleConfirmDisbursement(
+                                            user,
+                                            'BANK_API',
+                                            effectivePrincipal
+                                          )
+                                        }
+                                        className="px-2.5 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold cursor-pointer whitespace-nowrap"
+                                      >
+                                        Giro API Banco
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRejectDisbursement(user)}
+                                        className="px-2 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold cursor-pointer whitespace-nowrap"
+                                      >
+                                        Rechazar
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Clientes con Cupo en $0 para Aprobar Desembolso Directo desde Admin/Trabajador */}
+                  <div className="bg-white border border-slate-200">
+                    <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+                      <div>
+                        <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-900">
+                          Desembolso Directo a Clientes con Cupo Habilitado en $0 Deuda
+                        </h4>
+                        <p className="text-[11px] text-slate-500">
+                          También puede aprobar un desembolso directamente a cualquier cliente que tenga cupo habilitado en $0.
+                        </p>
+                      </div>
+                      <span className="status-tag cyan">
+                        {portfolioSummary.cupoEnCeroDeudaCount} clientes con cupo disponible
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="fintech-DataMatrix">
+                        <thead>
+                          <tr>
+                            <th>Cliente</th>
+                            <th>Cupo Aprobado Disponible</th>
+                            <th>Monto a Desembolsar (COP)</th>
+                            <th>Deuda a Generar</th>
+                            <th className="text-right">Acción Directa</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {clientUsers.filter(
+                            u =>
+                              u.creditStatus === 'ASIGNADO' &&
+                              (u.availableBalance || 0) === 0 &&
+                              u.paymentStatus !== 'EN_DESEMBOLSO' &&
+                              u.disbursementRequest?.status !== 'EN_PROCESO_DESEMBOLSO'
+                          ).length === 0 ? (
+                            <tr>
+                              <td colSpan={5} className="text-center py-6 text-xs text-slate-400">
+                                No hay clientes con cupo en $0 pendientes de desembolso directo.
+                              </td>
+                            </tr>
+                          ) : (
+                            clientUsers
+                              .filter(
+                                u =>
+                                  u.creditStatus === 'ASIGNADO' &&
+                                  (u.availableBalance || 0) === 0 &&
+                                  u.paymentStatus !== 'EN_DESEMBOLSO' &&
+                                  u.disbursementRequest?.status !== 'EN_PROCESO_DESEMBOLSO'
+                              )
+                              .map(user => {
+                                const rawVal =
+                                  inlineDisbursementPrincipal[user.id] !== undefined
+                                    ? inlineDisbursementPrincipal[user.id]
+                                    : String(user.creditLimit || 5000000);
+                                const amountToDisburse = Math.max(
+                                  100000,
+                                  Number(rawVal) || user.creditLimit || 5000000
+                                );
+                                const breakdown = StorageService.buildFixedLoanBreakdown({
+                                  principalAmount: amountToDisburse,
+                                  termMonths: user.loanTermMonths || 12,
+                                  interestRatePercentage:
+                                    user.interestRateApplied ?? loanSettings.monthlyInterestRate,
+                                  fianzaPercentage: loanSettings.fianzaPercentage ?? 3.5,
+                                  electronicSignatureFee:
+                                    loanSettings.electronicSignatureFee ?? 28500,
+                                  collectionExpenses: 0,
+                                  ivaPercentage:
+                                    user.taxPercentageApplied ?? loanSettings.taxPercentage,
+                                  paymentDeadline:
+                                    user.nextPaymentDate || 'Día 05 (2026-11-05)'
+                                });
+
+                                return (
+                                  <tr key={user.id}>
+                                    <td>
+                                      <div className="font-bold text-slate-900 text-xs">
+                                        {user.fullName}
+                                      </div>
+                                      <div className="text-[11px] font-mono text-slate-500">
+                                        CC {user.cedula}
+                                      </div>
+                                    </td>
+                                    <td className="font-mono font-bold text-purple-700 text-xs">
+                                      {formatCOP(user.creditLimit)}
+                                    </td>
+                                    <td>
+                                      <input
+                                        type="number"
+                                        min={100000}
+                                        max={user.creditLimit || 50000000}
+                                        step={500000}
+                                        value={rawVal}
+                                        onChange={e =>
+                                          setInlineDisbursementPrincipal(prev => ({
+                                            ...prev,
+                                            [user.id]: e.target.value
+                                          }))
+                                        }
+                                        className="inline-cell-input font-mono max-w-[180px]"
+                                      />
+                                    </td>
+                                    <td>
+                                      <div className="font-mono font-bold text-slate-900 text-xs">
+                                        {formatCOP(breakdown.totalPaymentAmount)}
+                                      </div>
+                                      <div className="text-[10px] text-rose-700 font-mono">
+                                        Disminuye cupo en -{formatCOP(amountToDisburse)}
+                                      </div>
+                                    </td>
+                                    <td className="text-right">
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleConfirmDisbursement(
+                                            user,
+                                            'STAFF',
+                                            amountToDisburse
+                                          )
+                                        }
+                                        className="px-3 py-1.5 bg-purple-700 hover:bg-purple-800 text-white text-xs font-bold cursor-pointer"
+                                      >
+                                        Aprobar Desembolso y Cargar Deuda
+                                      </button>
+                                    </td>
+                                  </tr>
+                                );
+                              })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Historial de Desembolsos Activos (Disminución de Cupo y Deuda Cargada en Panel del Cliente) */}
+                  <div className="bg-white border border-slate-200">
+                    <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+                      <div>
+                        <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-900">
+                          Desembolsos Aprobados Activos • Control de Disminución de Cupo y Deuda ({portfolioSummary.activosConDeudaCount})
+                        </h4>
+                        <p className="text-[11px] text-slate-500">
+                          Créditos desembolsados que actualmente disminuyen el cupo y figuran como deuda activa en el panel del cliente
+                        </p>
+                      </div>
+                      <span className="status-tag emerald">
+                        Deuda Total: {formatCOP(portfolioSummary.totalDeuda)}
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="fintech-DataMatrix">
+                        <thead>
+                          <tr>
+                            <th>Cliente</th>
+                            <th>Cupo Total</th>
+                            <th>Disminución de Cupo</th>
+                            <th>Cupo Disponible</th>
+                            <th>Deuda Activa en Panel Cliente</th>
+                            <th>Cuota Mensual</th>
+                            <th>Estado</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {clientUsers
+                            .filter(u => (u.availableBalance || 0) > 0)
+                            .map(user => {
+                              const cupo = Number(user.creditLimit) || 0;
+                              const deuda = Number(user.availableBalance) || 0;
+                              const lb = user.loanBreakdown;
+                              const principal = lb?.principalAmount || Math.min(cupo, deuda);
+                              const totalCredito =
+                                lb?.totalPaymentAmount || Math.max(deuda, principal);
+                              const ratio =
+                                totalCredito > 0 ? Math.min(1, deuda / totalCredito) : 1;
+                              const disminucion = Math.min(
+                                cupo,
+                                Math.round(principal * ratio)
+                              );
+                              const disponible = Math.max(0, cupo - disminucion);
+
+                              return (
+                                <tr key={user.id}>
+                                  <td>
+                                    <div className="font-bold text-slate-900 text-xs">
+                                      {user.fullName}
+                                    </div>
+                                    <div className="text-[11px] font-mono text-slate-500">
+                                      CC {user.cedula} · {user.creditTramiteId}
+                                    </div>
+                                  </td>
+                                  <td className="font-mono font-bold text-purple-700 text-xs">
+                                    {formatCOP(cupo)}
+                                  </td>
+                                  <td className="font-mono font-bold text-rose-700 text-xs">
+                                    -{formatCOP(disminucion)}
+                                  </td>
+                                  <td className="font-mono font-bold text-emerald-700 text-xs">
+                                    {formatCOP(disponible)}
+                                  </td>
+                                  <td className="font-mono font-extrabold text-slate-900 text-xs">
+                                    {formatCOP(deuda)}
+                                  </td>
+                                  <td className="font-mono text-xs text-slate-700">
+                                    {formatCOP(
+                                      user.customInstallmentAmount ||
+                                        lb?.monthlyInstallment ||
+                                        0
+                                    )}
+                                  </td>
+                                  <td>
+                                    <span
+                                      className={`status-tag ${
+                                        user.paymentStatus === 'EN_MORA'
+                                          ? 'coral'
+                                          : 'emerald'
+                                      }`}
+                                    >
+                                      {user.paymentStatus === 'EN_MORA'
+                                        ? `MORA (${user.daysOverdue || 15}d)`
+                                        : 'DEUDA ACTIVA AL DÍA'}
+                                    </span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ACCIÓN 4: COBRANZA Y MORA */}
+              {activeAction === 'OVERDUE_COLLECTION' && (
                 <div
                   className={`space-y-3 action-panel-slide ${
                     isWorker ? 'worker-context' : ''
@@ -1666,11 +2893,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   <div className="bg-white border border-slate-200 px-3 sm:px-3.5 py-2.5 flex flex-col md:flex-row md:items-center justify-between gap-2.5">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className={`status-tag ${isAdmin ? 'cyan' : 'teal'}`}>
-                        {activeAction === 'APPROVE_PENDING'
-                          ? 'Solicitudes Pendientes'
-                          : activeAction === 'OVERDUE_COLLECTION'
-                          ? 'Cobranza en Mora'
-                          : 'Cartera General'}
+                        Cobranza en Mora
                       </span>
                       <span className="text-xs font-mono text-slate-500">
                         ({filteredClients.length} registros)
@@ -1693,33 +2916,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           className="bg-slate-50 border border-slate-300 text-slate-900 text-xs pl-8 pr-3 py-1.5 w-full sm:w-56 focus:bg-white focus:border-purple-600 focus:outline-none"
                         />
                       </div>
-
-                      {activeAction === 'ALL_PORTFOLIO' && (
-                        <div className="flex flex-wrap items-center bg-slate-100 p-0.5 border border-slate-200 w-full sm:w-auto">
-                          {(
-                            [
-                              { id: 'ALL', label: 'Todos' },
-                              { id: 'AL_DIA', label: 'Al Día' },
-                              { id: 'EN_DESEMBOLSO', label: 'En Desembolso' },
-                              { id: 'EN_MORA', label: 'Mora' },
-                              { id: 'PENDIENTE', label: 'Pendientes' }
-                            ] as const
-                          ).map(f => (
-                            <button
-                              key={f.id}
-                              type="button"
-                              onClick={() => setStatusFilter(f.id)}
-                              className={`flex-1 sm:flex-initial px-2 sm:px-2.5 py-1 text-[11px] font-bold cursor-pointer whitespace-nowrap ${
-                                statusFilter === f.id
-                                  ? 'bg-white text-slate-900 shadow-2xs'
-                                  : 'text-slate-600 hover:text-slate-900'
-                              }`}
-                            >
-                              {f.label}
-                            </button>
-                          ))}
-                        </div>
-                      )}
 
                       {hasAccess('CREAR_USUARIOS') && (
                         <button

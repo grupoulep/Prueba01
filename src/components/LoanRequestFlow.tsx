@@ -501,31 +501,19 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
           </div>
         </div>
 
-        {/* Acciones de sincronización con API de la Entidad Bancaria o Espera de Personal */}
+        {/* Estado de espera de aprobación en el Panel de Administración / Trabajador */}
         <div className="pt-2 border-t border-purple-100 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="text-xs text-purple-800">
-            Esperando confirmación del{' '}
-            <strong>Personal en el Panel Admin/Trabajadores</strong> o
-            activación directa desde la API de tu entidad bancaria:
+            Tu solicitud fue enviada al módulo{' '}
+            <strong>Aprobar Desembolso (Panel Admin / Trabajador)</strong>. Al
+            ser aprobada, se marcará la disminución de tu cupo disponible y se
+            reflejará como deuda activa en tu panel.
           </div>
 
-          <button
-            type="button"
-            disabled={isCheckingBankApi}
-            onClick={handleBankApiDisbursementActivation}
-            className="w-full sm:w-auto px-4 py-2.5 bg-sky-700 hover:bg-sky-800 text-white font-bold text-xs rounded transition flex items-center justify-center gap-2 cursor-pointer shrink-0"
-          >
-            <RefreshCw
-              className={`w-4 h-4 ${isCheckingBankApi ? 'animate-spin' : ''}`}
-            />
-            <span>
-              {isCheckingBankApi
-                ? 'Validando con API Bancaria...'
-                : `Activar por API ${
-                    user.disbursementRequest?.bankEntity || 'Bancaria'
-                  } (Desembolso Recibido)`}
-            </span>
-          </button>
+          <span className="px-3.5 py-2 bg-sky-100 text-sky-900 border border-sky-300 font-bold text-xs rounded flex items-center gap-2 shrink-0">
+            <Clock className="w-4 h-4 text-sky-700 animate-spin" />
+            <span>Pendiente de Aprobar Desembolso</span>
+          </span>
         </div>
       </div>
     );
@@ -536,12 +524,20 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
   // =========================================================================
   return (
     <div className="w-full flex-1 flex flex-col justify-between bg-white border-2 border-purple-700 rounded p-4 sm:p-8 md:p-10 shadow-xs animate-fadeIn min-h-[70vh] sm:min-h-[78vh]">
-      {/* Cabecera con Cupo Habilitado y Línea de Progreso Continua sin Números */}
+      {/* Cabecera con Cupo Habilitado, Deuda Inicial $0 y Línea de Progreso Continua sin Números */}
       <div className="space-y-4 border-b border-purple-200 pb-4 sm:pb-5">
-        <div className="flex items-center justify-between sm:justify-end">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
+          <div className="bg-emerald-50 border border-emerald-200 px-3.5 sm:px-4 py-2 rounded flex sm:block items-center justify-between text-left">
+            <span className="text-[10px] font-bold uppercase text-emerald-700 block">
+              Deuda Actual en tu Panel
+            </span>
+            <span className="font-mono font-extrabold text-base sm:text-lg text-emerald-800">
+              {formatMoney(user.availableBalance || 0)}
+            </span>
+          </div>
           <div className="w-full sm:w-auto bg-purple-50 border border-purple-200 px-3.5 sm:px-4 py-2 rounded flex sm:block items-center justify-between text-right">
             <span className="text-[10px] font-bold uppercase text-purple-700 block">
-              Tu Cupo Máximo Habilitado
+              Tu Cupo Aprobado Disponible
             </span>
             <span className="font-mono font-extrabold text-base sm:text-lg text-purple-950">
               {formatMoney(maxCreditLimit)}

@@ -147,18 +147,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
     return initialUser.creditLimit || 18500000;
   });
 
-  // Cupo máximo disponible según el perfil del cliente
+  // Cupo máximo disponible según el cupo aprobado en el Panel Admin
   const cupoMaximoCliente = useMemo(() => {
+    if (user.creditLimit && user.creditLimit > 0) {
+      return user.creditLimit;
+    }
     const previousMax = (user.previousLoans || []).reduce(
       (max, l) => Math.max(max, l.amountGranted || 0),
       0
     );
-    return Math.max(
-      user.creditLimit || 0,
-      loanGrantedAmount || 0,
-      previousMax,
-      18500000
-    );
+    return Math.max(loanGrantedAmount || 0, previousMax, 10000000);
   }, [user.creditLimit, user.previousLoans, loanGrantedAmount]);
 
 
@@ -234,7 +232,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
       const isRejected =
         (statusData && statusData.installmentStatus === 'RECHAZADA') ||
         returnedStatus === 'rejected' ||
-        returnedStatus === 'rechazada';
+        returnedStatus === 'rechazada' ||
+        returnedStatus === 'cancelled' ||
+        returnedStatus === 'canceled' ||
+        returnedStatus === 'cancelado' ||
+        returnedStatus === 'cancelada' ||
+        returnedStatus === 'failed' ||
+        returnedStatus === 'error';
 
       if (isApproved) {
         const pendingSession = await EfipayService.getPendingGatewaySession(returnedRef);
@@ -446,12 +450,40 @@ export const Dashboard: React.FC<DashboardProps> = ({
     ? Math.min(saldoPendiente, cuotaExactaMensual)
     : 0;
 
-  // Valor del cupo en general ("Límite") y valor disponible que aún puede sacar del cupo ("Disponible")
+  // Valor del cupo en general ("Límite") y valor disponible que aún puede sacar del cupo ("Disponible" disminuido por el desembolso)
   const limiteCupoGeneral =
-    montoPrestado > 0 ? montoPrestado : cupoMaximoCliente;
+    user.creditLimit && user.creditLimit > 0
+      ? user.creditLimit
+      : montoPrestado > 0
+      ? montoPrestado
+      : cupoMaximoCliente;
+
+  const cupoUtilizadoPorDeuda = useMemo(() => {
+    if (saldoPendiente <= 0) return 0;
+    const totalLoanDebt =
+      activeLoanBreakdown.totalPaymentAmount || saldoPendiente;
+    const principalDisbursed =
+      activeLoanBreakdown.principalAmount || saldoPendiente;
+    if (limiteCupoGeneral === totalLoanDebt) {
+      return saldoPendiente;
+    }
+    const unpaidPrincipal =
+      totalLoanDebt > 0
+        ? Number(
+            ((saldoPendiente / totalLoanDebt) * principalDisbursed).toFixed(2)
+          )
+        : saldoPendiente;
+    return Math.min(limiteCupoGeneral, unpaidPrincipal);
+  }, [
+    saldoPendiente,
+    activeLoanBreakdown.totalPaymentAmount,
+    activeLoanBreakdown.principalAmount,
+    limiteCupoGeneral
+  ]);
+
   const cupoDisponibleParaSacar = Math.max(
     0,
-    Number((limiteCupoGeneral - saldoPendiente).toFixed(2))
+    Number((limiteCupoGeneral - cupoUtilizadoPorDeuda).toFixed(2))
   );
 
   const formatInstallmentValue = (val: number) => {
@@ -1211,12 +1243,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
       }
     });
 
-    // 2. Si el crédito activo ya tiene abonos previos (montoPrestado > saldoPendiente) que liberaron cupo
-    const abonoPrevio = Math.max(
-      0,
-      montoPrestado - saldoPendiente - totalRecordedPaid
-    );
-    if (isLoanAssigned && abonoPrevio > 0) {
+    // 2. Si el crédito desembolsado activo ya tiene abonos previos que liberaron cupo
+    const initialActiveDebt =
+      activeLoanBreakdown.totalPaymentAmount || saldoPendiente;
+    const abonoPrevio =
+      saldoPendiente > 0
+        ? Math.max(0, initialActiveDebt - saldoPendiente - totalRecordedPaid)
+        : 0;
+    if (isLoanAssigned && saldoPendiente > 0 && abonoPrevio > 0) {
       const { dateText, timeText, timestamp } = parseDateTime(
         user.lastPaymentDate || user.creditAssignedDate,
         '04:20 p. m.'
@@ -1233,19 +1267,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
       });
     }
 
-    // 3. Retiro / Desembolso del crédito actual
-    if (isLoanAssigned && montoPrestado > 0) {
+    // 3. Retiro / Desembolso aprobado del crédito actual (disminución de cupo y cargo a deuda)
+    if (isLoanAssigned && saldoPendiente > 0) {
       const { dateText, timeText, timestamp } = parseDateTime(
-        user.disbursementRequest?.signedAt || user.creditAssignedDate,
+        user.disbursementRequest?.confirmedAt ||
+          user.disbursementRequest?.signedAt ||
+          user.creditAssignedDate,
         '09:45 a. m.'
       );
       items.push({
         id: `retiro-actual-${user.creditTramiteId}`,
         type: 'Retiro',
-        description: `Retiro de crédito (${user.creditTramiteId})`,
+        description: `Desembolso aprobado (${user.creditTramiteId})`,
         dateText,
         timeText,
-        amount: montoPrestado,
+        amount: activeLoanBreakdown.principalAmount || saldoPendiente,
         increasesCupo: false,
         timestamp
       });
@@ -1654,6 +1690,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 {formatInstallmentValue(valorCuotaCard)}
               </div>
 
+              {!isDisbursementInProcess && saldoPendiente > 0 && (
+                <p className="text-xs sm:text-sm text-gray-600">
+                  Deuda total activa:{' '}
+                  <span className="font-mono font-bold text-gray-900">
+                    {formatInstallmentValue(saldoPendiente)}
+                  </span>
+                </p>
+              )}
+
               {/* Debajo: en color gris y más pequeño "Pagar antes de (fecha y hora en gris un poquito más marcado)" */}
               <p className="text-xs sm:text-sm text-gray-500">
                 Pagar antes de{' '}
@@ -1752,6 +1797,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <span className="text-gray-700 font-semibold">
                   {formatInstallmentValue(limiteCupoGeneral)}
                 </span>
+                {cupoUtilizadoPorDeuda > 0 && (
+                  <span className="ml-2 text-rose-600 font-semibold">
+                    • Disminución de cupo: -{formatInstallmentValue(cupoUtilizadoPorDeuda)}
+                  </span>
+                )}
               </p>
             </div>
 
@@ -2056,271 +2106,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                     {/* Contenedor Central Tipo Encuesta a Pantalla Completa */}
                     <div className="w-full flex-1 px-4 sm:px-8 lg:px-12 pt-6 sm:pt-8 pb-28 flex flex-col space-y-6">
-                      {paymentOutcomeStatus === 'PAGO_PROCESADO' &&
-                      efipayReceipt ? (
-                        <div className="w-full max-w-md mx-auto bg-white border border-gray-300 shadow-md p-6 sm:p-8 text-gray-900 font-mono flex flex-col justify-between space-y-5 animate-fadeIn">
-                          {/* Cabecera del Ticket con el Logo Oficial */}
-                          <div className="flex flex-col items-center text-center space-y-2 border-b border-dashed border-gray-400 pb-4">
-                            <img
-                              src={`${import.meta.env.BASE_URL}assets/aistudio/52878_14fa00e9.png`}
-                              alt="Logo"
-                              className="h-8 sm:h-9 w-auto object-contain mx-auto select-none"
-                            />
-                            <div className="pt-1">
-                              <h4 className="text-sm sm:text-base font-extrabold tracking-widest uppercase text-black">
-                                TICKET DE PAGO
-                              </h4>
-                              <p className="text-[11px] sm:text-xs text-gray-600 mt-0.5">
-                                {new Date(efipayReceipt.settledAt).toLocaleString('es-CO')}
-                              </p>
-                            </div>
-                          </div>
-
-                          {/* Datos de la Transacción e IP */}
-                          <div className="space-y-2 text-xs sm:text-sm border-b border-dashed border-gray-400 pb-4">
-                            <div className="flex items-baseline justify-between gap-2">
-                              <span className="text-gray-600">Código transacción:</span>
-                              <strong className="font-bold text-black text-right">
-                                {efipayReceipt.transactionId}
-                              </strong>
-                            </div>
-                            <div className="flex items-baseline justify-between gap-2">
-                              <span className="text-gray-600">Autorización:</span>
-                              <span className="font-semibold text-gray-900 text-right">
-                                {efipayReceipt.authorizationCode}
-                              </span>
-                            </div>
-                            <div className="flex items-baseline justify-between gap-2">
-                              <span className="text-gray-600">Dirección IP:</span>
-                              <span className="font-semibold text-gray-900 text-right">
-                                {clientIp}
-                              </span>
-                            </div>
-                            <div className="flex items-baseline justify-between gap-2">
-                              <span className="text-gray-600">Cliente:</span>
-                              <span className="font-semibold text-gray-900 text-right truncate max-w-[60%]">
-                                {payerFullName}
-                              </span>
-                            </div>
-                            <div className="flex items-baseline justify-between gap-2">
-                              <span className="text-gray-600">Cédula:</span>
-                              <span className="font-semibold text-gray-900 text-right">
-                                {payerCedula}
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Detalle de Pago, Saldo Faltante y Cupo Restante */}
-                          <div className="space-y-2.5 text-xs sm:text-sm border-b border-dashed border-gray-400 pb-4">
-                            <div className="flex items-baseline justify-between gap-2">
-                              <span className="font-bold text-black">Cuánto pagó:</span>
-                              <strong className="text-base sm:text-lg font-extrabold text-black text-right">
-                                {formatInstallmentValue(efipayReceipt.amount)}
-                              </strong>
-                            </div>
-                            <div className="flex items-baseline justify-between gap-2">
-                              <span className="text-gray-700 font-semibold">Cuánto le falta:</span>
-                              <strong className="font-bold text-gray-900 text-right">
-                                {formatInstallmentValue(saldoPendiente)}
-                              </strong>
-                            </div>
-                            <div className="flex items-baseline justify-between gap-2">
-                              <span className="text-gray-700 font-semibold">Cupo que le quedó:</span>
-                              <strong className="font-bold text-gray-900 text-right">
-                                {formatInstallmentValue(cupoDisponibleParaSacar)}
-                              </strong>
-                            </div>
-                            <div className="flex items-baseline justify-between gap-2 text-[11px] sm:text-xs">
-                              <span className="text-gray-500">Límite del cupo:</span>
-                              <span className="text-gray-700 font-semibold text-right">
-                                {formatInstallmentValue(limiteCupoGeneral)}
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Pie del Ticket */}
-                          <div className="text-center space-y-1">
-                            <p className="text-xs font-extrabold text-black tracking-wider uppercase">
-                              ESTADO: CUOTA PAGADA
-                            </p>
-                            <p className="text-[11px] text-gray-500">
-                              Ref. {efipayReceipt.referenceCode}
-                            </p>
-                          </div>
-
-                          {/* Botones de Acción */}
-                          <div className="pt-2 flex flex-col gap-2.5 font-sans">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleDownloadReceiptPdf(efipayReceipt)
-                              }
-                              className="w-full py-3 bg-black hover:bg-gray-800 text-white text-xs sm:text-sm font-bold rounded-xl flex items-center justify-center gap-2 cursor-pointer transition"
-                            >
-                              <Download className="w-4 h-4 shrink-0" />
-                              <span>Descargar ticket</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setPaymentModalType(null);
-                                setIsPaySelectionWindowOpen(false);
-                                setEfipayReceipt(null);
-                                setLastCompletedReceipt(null);
-                                setPaymentOutcomeStatus(null);
-                              }}
-                              className="w-full py-3 bg-gray-100 hover:bg-gray-200 text-gray-900 text-xs sm:text-sm font-bold rounded-xl cursor-pointer transition"
-                            >
-                              Cerrar y volver al inicio
-                            </button>
-                          </div>
-                        </div>
-                      ) : paymentOutcomeStatus === 'PAGO_CANCELADO' ? (
-                        <div className="w-full flex-1 bg-white border-2 border-rose-500 rounded-2xl p-5 sm:p-8 lg:p-10 shadow-sm flex flex-col justify-between space-y-5 animate-fadeIn">
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-rose-200 pb-4">
-                            <div className="flex items-start sm:items-center gap-3.5">
-                              <div className="w-12 h-12 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0">
-                                <XCircle className="w-7 h-7" />
-                              </div>
-                              <div>
-                                <span className="inline-block text-[11px] font-mono font-extrabold uppercase tracking-wider bg-rose-100 text-rose-900 px-2.5 py-0.5 rounded border border-rose-300">
-                                  Comprobante de Cancelación
-                                </span>
-                                <h4 className="text-xl sm:text-2xl font-extrabold text-rose-950 tracking-tight mt-1">
-                                  PAGO CANCELADO
-                                </h4>
-                                <p className="text-xs sm:text-sm text-rose-800 font-medium">
-                                  El pago no fue procesado o fue cancelado. No
-                                  se realizó ningún cargo a tu cuenta.
-                                </p>
-                              </div>
-                            </div>
-
-                            <div className="bg-rose-50 border border-rose-300 px-4 py-2 rounded-xl">
-                              <span className="text-[10px] font-bold uppercase text-rose-800 block">
-                                Referencia Registrada
-                              </span>
-                              <strong className="font-mono text-sm font-extrabold text-rose-950">
-                                {cancelledPaymentRef || paymentReference}
-                              </strong>
-                            </div>
-                          </div>
-
-                          <div className="flex flex-col sm:flex-row items-center justify-end gap-3 pt-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (paymentModalType) {
-                                  handleOpenPaymentPanel(paymentModalType);
-                                }
-                              }}
-                              className="w-full sm:w-auto px-5 py-3 bg-purple-700 hover:bg-purple-800 text-white text-xs font-extrabold rounded-xl cursor-pointer transition"
-                            >
-                              Volver a Intentar el Pago
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setPaymentModalType(null);
-                                setIsPaySelectionWindowOpen(false);
-                                setEfipayReceipt(null);
-                                setLastCompletedReceipt(null);
-                                setPaymentOutcomeStatus(null);
-                              }}
-                              className="w-full sm:w-auto px-5 py-3 bg-white hover:bg-rose-50 text-rose-900 border border-rose-300 text-xs font-bold rounded-xl cursor-pointer transition"
-                            >
-                              Cerrar y Volver al Panel
-                            </button>
-                          </div>
-                        </div>
-                      ) : efipayReceipt?.checkoutUrl ? (
-                        <div className="w-full max-w-lg mx-auto bg-white border border-purple-200 rounded-2xl p-6 sm:p-8 shadow-sm flex flex-col items-center text-center space-y-5 animate-fadeIn">
-                          <div className="w-14 h-14 rounded-2xl bg-purple-100 text-purple-800 flex items-center justify-center">
-                            <ShieldCheck className="w-8 h-8" />
-                          </div>
-
-                          <div className="space-y-1.5">
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                              <Lock className="w-3 h-3" />
-                              <span>Sesión de Pago Generada • Ref. {efipayReceipt.referenceCode}</span>
-                            </span>
-                            <h4 className="text-lg sm:text-xl font-extrabold text-gray-900 tracking-tight pt-1">
-                              Continúa en la Pasarela de Pagos
-                            </h4>
-                            <p className="text-xs sm:text-sm text-gray-600 leading-relaxed">
-                              Tu orden por{' '}
-                              <strong className="text-purple-800 font-extrabold">
-                                {formatDotCurrency(efipayReceipt.amount)}
-                              </strong>{' '}
-                              está lista. Haz clic en el botón inferior para abrir la pasarela de pago segura y completar tu transacción.
-                            </p>
-                          </div>
-
-                          {efipayError && (
-                            <div className="w-full p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium">
-                              {efipayError}
-                            </div>
-                          )}
-
-                          <div className="w-full flex flex-col gap-3 pt-1">
-                            <a
-                              href={efipayReceipt.checkoutUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="w-full py-3.5 px-5 bg-purple-700 hover:bg-purple-800 active:scale-[0.99] text-white text-sm font-extrabold rounded-xl shadow-xs flex items-center justify-center gap-2 transition cursor-pointer"
-                            >
-                              <span>Ir a la Pasarela de Pago Segura</span>
-                              <ArrowRight className="w-4 h-4 shrink-0" />
-                            </a>
-
-                            <button
-                              type="button"
-                              disabled={isProcessingPayment}
-                              onClick={handleVerifyGatewayStatusNow}
-                              className="w-full py-3 px-4 bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200 text-xs sm:text-sm font-bold rounded-xl transition cursor-pointer disabled:opacity-60"
-                            >
-                              {isProcessingPayment
-                                ? 'Verificando confirmación del pago...'
-                                : 'Ya realicé mi pago • Verificar estado'}
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={handleCancelPaymentGateway}
-                              className="w-full py-2.5 px-4 bg-white hover:bg-rose-50 text-gray-600 hover:text-rose-700 text-xs font-semibold rounded-xl transition cursor-pointer"
-                            >
-                              Cancelar intento de pago
-                            </button>
-                          </div>
-
-                          <div className="flex items-center justify-center gap-2 text-[11px] text-gray-500 pt-1">
-                            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                            <span>Esperando confirmación automática del Webhook...</span>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="w-full flex-1 bg-white border border-purple-200 rounded-2xl p-6 sm:p-10 shadow-xs flex flex-col items-center justify-center text-center space-y-5 animate-fadeIn">
-                          <div className="w-12 h-12 rounded-full border-3 border-purple-200 border-t-purple-700 animate-spin" />
-                          <div className="space-y-1.5 max-w-md">
-                            <h4 className="text-lg sm:text-xl font-extrabold text-gray-900 tracking-tight">
-                              Conectando con la pasarela de pagos...
-                            </h4>
-                            <p className="text-xs sm:text-sm text-gray-500">
-                              Monto a pagar:{' '}
-                              <strong className="text-purple-800 font-bold">
-                                {formatDotCurrency(
-                                  paymentModalType === 'CREDITO_COMPLETO'
-                                    ? saldoPendiente
-                                    : paymentModalType === 'CUOTA_PERSONALIZADA'
-                                    ? customPaymentAmount
-                                    : valorCuotaCard
-                                )}
-                              </strong>
-                            </p>
-                          </div>
-                        </div>
-                      )}
+                      <div className="w-full flex-1 bg-white border border-purple-200 rounded-2xl p-6 sm:p-10 shadow-xs flex flex-col items-center justify-center text-center animate-fadeIn">
+                        <h4 className="text-lg sm:text-xl font-extrabold text-gray-900 tracking-tight uppercase">
+                          {paymentOutcomeStatus === 'PAGO_PROCESADO'
+                            ? 'PROCESO COMPLETO'
+                            : paymentOutcomeStatus === 'PAGO_CANCELADO'
+                            ? 'CANCELADO'
+                            : 'PROCESANDO'}
+                        </h4>
+                      </div>
                     </div>
                   </div>
                 )}
