@@ -27,7 +27,8 @@ import {
   ChevronUp,
   X,
   Home,
-  Activity
+  Activity,
+  User as UserIcon
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { StorageService } from '../services/storageService';
@@ -60,9 +61,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [hideBalance, setHideBalance] = useState<boolean>(false);
   const [integrityValid, setIntegrityValid] = useState<boolean>(true);
 
-  // Pestaña activa de la barra inferior fija ("Inicio" | "Actividad")
+  // Pestaña activa de la barra inferior fija ("Inicio" | "Actividad" | "Perfil")
   const [activeBottomSection, setActiveBottomSection] = useState<
-    'INICIO' | 'ACTIVIDAD'
+    'INICIO' | 'ACTIVIDAD' | 'PERFIL'
   >('INICIO');
 
   // Estado para pago en línea (Ventana a pantalla completa "¿Cuánto deseas pagar?" y flujo de pago)
@@ -278,6 +279,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
     ? Math.min(saldoPendiente, cuotaExactaMensual)
     : 0;
 
+  // Valor del cupo en general ("Límite") y valor disponible que aún puede sacar del cupo ("Disponible")
+  const limiteCupoGeneral =
+    montoPrestado > 0 ? montoPrestado : cupoMaximoCliente;
+  const cupoDisponibleParaSacar = Math.max(
+    0,
+    Number((limiteCupoGeneral - saldoPendiente).toFixed(2))
+  );
+
   const formatInstallmentValue = (val: number) => {
     return (
       '$' +
@@ -378,28 +387,114 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   const installmentDeadlineText = getInstallmentDeadlineText();
 
-  const handleOpenPaymentPanel = (
+  const handleOpenPaymentPanel = async (
     type: 'CUOTA' | 'CUOTA_PERSONALIZADA' | 'CREDITO_COMPLETO'
   ) => {
+    if (isProcessingPayment) return;
+
+    const amountToPay =
+      type === 'CREDITO_COMPLETO'
+        ? saldoPendiente
+        : type === 'CUOTA_PERSONALIZADA'
+        ? Math.min(
+            saldoPendiente,
+            Math.max(
+              1,
+              customPaymentAmount > 0
+                ? customPaymentAmount
+                : valorCuota > 0
+                ? valorCuota
+                : saldoPendiente
+            )
+          )
+        : valorCuota > 0
+        ? valorCuota
+        : saldoPendiente;
+
+    if (amountToPay <= 0) return;
+
+    const generatedRef =
+      'PAG-EFI-' + Math.floor(100000 + Math.random() * 900000);
+    const resolvedFullName = (user.fullName || payerFullName || 'Cliente CrediULEP').trim();
+    const resolvedCedula = (user.cedula || payerCedula || '1000000000').trim();
+    const resolvedEmail = (user.email || payerEmail || 'cliente@crediulep.com').trim();
+
     setPaymentSuccessMessage(null);
     setEfipayReceipt(null);
     setEfipayError(null);
     setPaymentOutcomeStatus(null);
-    setPayerFullName(user.fullName || '');
-    setPayerCedula(user.cedula || '');
-    setPayerEmail(user.email || '');
-    setPaymentReference(
-      'PAG-EFI-' + Math.floor(100000 + Math.random() * 900000)
-    );
-    if (type === 'CREDITO_COMPLETO') {
-      setCustomPaymentAmount(saldoPendiente);
-    } else if (
-      type === 'CUOTA_PERSONALIZADA' &&
-      (customPaymentAmount <= 0 || customPaymentAmount > saldoPendiente)
-    ) {
-      setCustomPaymentAmount(valorCuota > 0 ? valorCuota : saldoPendiente);
-    }
+    setPayerFullName(resolvedFullName);
+    setPayerCedula(resolvedCedula);
+    setPayerEmail(resolvedEmail);
+    setPaymentReference(generatedRef);
     setPaymentModalType(type);
+    setIsProcessingPayment(true);
+
+    try {
+      const receipt = await EfipayService.processEncryptedPayment({
+        userId: user.id,
+        cedula: resolvedCedula,
+        fullName: resolvedFullName,
+        email: resolvedEmail,
+        tramiteId: user.creditTramiteId,
+        amount: amountToPay,
+        paymentType: type,
+        channel: efipayChannel,
+        referenceCode: generatedRef,
+        pseBank,
+        psePersonType,
+        cardNumber: '',
+        cardExpiry: '',
+        cardCvv: '',
+        cardInstallments: 1,
+        walletPhone: user.phone || walletPhone
+      });
+
+      const storagePayType =
+        type === 'CREDITO_COMPLETO' ? 'TOTALIDAD' : type;
+
+      const auditMethodLabel = `${receipt.channelLabel} [Efipay N° Pago: ${receipt.transactionId} | Auth: ${receipt.authorizationCode}]`;
+
+      const result = await StorageService.payLoan(
+        user.id,
+        amountToPay,
+        storagePayType,
+        auditMethodLabel,
+        {
+          paymentNumber: receipt.transactionId,
+          transactionId: receipt.transactionId,
+          authorizationCode: receipt.authorizationCode,
+          payerFullName: resolvedFullName,
+          payerCedula: resolvedCedula,
+          payerEmail: resolvedEmail
+        }
+      );
+
+      if (result.success && result.user) {
+        setUser(result.user);
+        setEfipayReceipt(receipt);
+        setLastCompletedReceipt(receipt);
+        setPaymentOutcomeStatus('PAGO_PROCESADO');
+        setPaymentSuccessMessage('PAGO PROCESADO');
+        setIsPartialPaymentExpanded(false);
+        setIsCustomAmountExpanded(false);
+        await fintechPanelsEngine.encryptAndBroadcastChange({
+          action: 'CLIENT_LOAN_PAYMENT',
+          userId: user.id,
+          amount: amountToPay,
+          remainingBalance: result.user.availableBalance,
+          efipayTransactionId: receipt.transactionId,
+          paymentNumber: receipt.transactionId,
+          status: 'PAGO_PROCESADO'
+        });
+      } else {
+        await handleCancelPaymentGateway();
+      }
+    } catch {
+      await handleCancelPaymentGateway();
+    } finally {
+      setIsProcessingPayment(false);
+    }
   };
 
   const handleCancelPaymentGateway = async () => {
@@ -915,7 +1010,56 @@ export const Dashboard: React.FC<DashboardProps> = ({
             : 'max-w-3xl px-4 sm:px-6 py-6 sm:py-10 space-y-8'
         }`}
       >
-        {activeBottomSection === 'ACTIVIDAD' ? (
+        {activeBottomSection === 'PERFIL' ? (
+          /* =========================================================================
+             PANEL DE DATOS PERSONALES DEL CLIENTE
+             ========================================================================= */
+          <div className="space-y-4 animate-fadeIn">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg sm:text-xl font-extrabold text-black tracking-tight">
+                Datos personales
+              </h2>
+            </div>
+
+            <div className="bg-white rounded-2xl p-5 sm:p-6 shadow-xs border border-gray-100 divide-y divide-gray-100">
+              <div className="py-3 first:pt-0 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                <span className="text-xs font-semibold text-gray-500">
+                  Nombre completo
+                </span>
+                <span className="text-sm sm:text-base font-bold text-gray-900">
+                  {user.fullName}
+                </span>
+              </div>
+
+              <div className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                <span className="text-xs font-semibold text-gray-500">
+                  Cédula de ciudadanía
+                </span>
+                <span className="text-sm sm:text-base font-bold text-gray-900 font-mono">
+                  {user.cedula}
+                </span>
+              </div>
+
+              <div className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                <span className="text-xs font-semibold text-gray-500">
+                  Correo electrónico
+                </span>
+                <span className="text-sm sm:text-base font-bold text-gray-900 break-all">
+                  {user.email}
+                </span>
+              </div>
+
+              <div className="py-3 last:pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                <span className="text-xs font-semibold text-gray-500">
+                  Teléfono celular
+                </span>
+                <span className="text-sm sm:text-base font-bold text-gray-900 font-mono">
+                  {user.phone || 'No registrado'}
+                </span>
+              </div>
+            </div>
+          </div>
+        ) : activeBottomSection === 'ACTIVIDAD' ? (
           /* =========================================================================
              PANEL DE ACTIVIDAD: PAGOS, RETIROS Y MOVIMIENTOS (UNO DEBAJO DE OTRO)
              ========================================================================= */
@@ -1017,7 +1161,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <span>Estado actual: Estudio y verificación en curso</span>
             </div>
           </div>
-        ) : isPaidOff ? (
+        ) : isPaidOff && !paymentModalType ? (
           <LoanRequestFlow
             user={user}
             loanSettings={loanSettings}
@@ -1131,6 +1275,29 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </div>
             )}
 
+            {/* =========================================================================
+                3. RECTÁNGULO DEBAJO DE PAGAR / RETIRAR: "DISPONIBLE" Y "LÍMITE"
+               ========================================================================= */}
+            <div className="bg-white rounded-xl p-5 sm:p-6 shadow-sm border border-gray-100 flex flex-col items-start text-left space-y-2 animate-fadeIn">
+              {/* Del lado izquierdo: "Disponible" en color negro */}
+              <span className="text-sm sm:text-base font-bold text-black">
+                Disponible
+              </span>
+
+              {/* Debajo: el valor disponible, lo que aún puede sacar del cupo (ej. "$534,837.54") */}
+              <div className="text-2xl sm:text-3xl font-extrabold text-purple-700 tracking-tight pt-0.5">
+                {formatInstallmentValue(cupoDisponibleParaSacar)}
+              </div>
+
+              {/* Debajo de lo que dispone: "Límite" y enseguida el cupo en general en números (ej. "$836,738.84") */}
+              <p className="text-xs sm:text-sm text-gray-500">
+                Límite{' '}
+                <span className="text-gray-700 font-semibold">
+                  {formatInstallmentValue(limiteCupoGeneral)}
+                </span>
+              </p>
+            </div>
+
             {isDisbursementInProcess ? (
               <LoanRequestFlow
                 user={user}
@@ -1145,86 +1312,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
               />
             ) : (
               <>
-                {/* Banner de Estado de Pago para el Cliente (PAGO PROCESADO / PAGO CANCELADO) */}
-                {paymentOutcomeStatus === 'PAGO_PROCESADO' &&
-                  lastCompletedReceipt &&
-                  !paymentModalType && (
-                    <div className="p-4 sm:p-5 rounded-xl bg-emerald-50/90 border border-emerald-400 space-y-3 animate-fadeIn">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                        <div className="flex items-start sm:items-center gap-3">
-                          <div className="w-10 h-10 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
-                            <CheckCircle2 className="w-6 h-6" />
-                          </div>
-                          <div>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-sm sm:text-base font-extrabold text-emerald-950 uppercase tracking-wide">
-                                PAGO PROCESADO
-                              </span>
-                              <span className="text-[11px] font-mono font-bold bg-white text-emerald-900 border border-emerald-300 px-2.5 py-0.5 rounded">
-                                N° Pago: {lastCompletedReceipt.transactionId}
-                              </span>
-                            </div>
-                            <p className="text-xs text-emerald-800 mt-0.5">
-                              Pago registrado por{' '}
-                              <strong>
-                                {formatMoney(lastCompletedReceipt.amount)}
-                              </strong>{' '}
-                              ({lastCompletedReceipt.channelLabel}).
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="flex flex-wrap items-center gap-2 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleDownloadReceiptPdf(lastCompletedReceipt)
-                            }
-                            className="w-full sm:w-auto px-4 py-2.5 bg-purple-800 hover:bg-purple-950 text-white text-xs font-extrabold rounded-lg flex items-center justify-center gap-2 cursor-pointer transition shadow-xs"
-                          >
-                            <Download className="w-4 h-4 shrink-0" />
-                            <span>DESCARGAR COMPROBANTE</span>
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                {paymentOutcomeStatus === 'PAGO_CANCELADO' &&
-                  !paymentModalType && (
-                    <div className="p-4 sm:p-5 rounded-xl bg-rose-50 border border-rose-400 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fadeIn">
-                      <div className="flex items-start sm:items-center gap-3">
-                        <div className="w-10 h-10 rounded-lg bg-rose-600 text-white flex items-center justify-center shrink-0">
-                          <XCircle className="w-6 h-6" />
-                        </div>
-                        <div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-sm sm:text-base font-extrabold text-rose-950 uppercase tracking-wide">
-                              PAGO CANCELADO
-                            </span>
-                            {cancelledPaymentRef && (
-                              <span className="text-[11px] font-mono font-bold bg-white text-rose-900 border border-rose-300 px-2.5 py-0.5 rounded">
-                                Ref: {cancelledPaymentRef}
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-xs text-rose-800 mt-0.5">
-                            La operación no fue completada. No se descontó
-                            ningún valor de tu saldo.
-                          </p>
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => setPaymentOutcomeStatus(null)}
-                        className="px-3.5 py-2 bg-white hover:bg-rose-100 text-rose-900 border border-rose-300 text-xs font-bold rounded-lg cursor-pointer self-start sm:self-center shrink-0"
-                      >
-                        Entendido
-                      </button>
-                    </div>
-                  )}
-
                 {/* =========================================================================
                     VENTANA EN TODA LA PANTALLA AL DAR CLIC EN "PAGAR": "¿Cuánto deseas pagar?"
                    ========================================================================= */}
@@ -1348,7 +1435,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   onClick={() => handleOpenPaymentPanel('CUOTA_PERSONALIZADA')}
                                   className="px-5 py-2.5 bg-purple-700 hover:bg-purple-800 disabled:bg-gray-200 disabled:text-gray-400 text-white font-bold text-xs sm:text-sm rounded-xl transition cursor-pointer disabled:cursor-not-allowed shrink-0"
                                 >
-                                  Continuar
+                                  Pagar
                                 </button>
                               </div>
                               {saldoPendiente > 0 && (
@@ -1374,6 +1461,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       type="button"
                       onClick={() => {
                         setPaymentModalType(null);
+                        setIsPaySelectionWindowOpen(false);
+                        setEfipayReceipt(null);
+                        setLastCompletedReceipt(null);
+                        setPaymentOutcomeStatus(null);
                         setEfipayError(null);
                       }}
                       aria-label="Cerrar y volver"
@@ -1488,6 +1579,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               onClick={() => {
                                 setPaymentModalType(null);
                                 setIsPaySelectionWindowOpen(false);
+                                setEfipayReceipt(null);
+                                setLastCompletedReceipt(null);
+                                setPaymentOutcomeStatus(null);
                               }}
                               className="w-full sm:w-auto px-6 py-3.5 bg-purple-800 hover:bg-purple-950 text-white text-xs sm:text-sm font-bold rounded-xl cursor-pointer transition"
                             >
@@ -1529,7 +1623,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           <div className="flex flex-col sm:flex-row items-center justify-end gap-3 pt-2">
                             <button
                               type="button"
-                              onClick={() => setPaymentOutcomeStatus(null)}
+                              onClick={() => {
+                                if (paymentModalType) {
+                                  handleOpenPaymentPanel(paymentModalType);
+                                }
+                              }}
                               className="w-full sm:w-auto px-5 py-3 bg-purple-700 hover:bg-purple-800 text-white text-xs font-extrabold rounded-xl cursor-pointer transition"
                             >
                               Volver a Intentar el Pago
@@ -1539,6 +1637,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               onClick={() => {
                                 setPaymentModalType(null);
                                 setIsPaySelectionWindowOpen(false);
+                                setEfipayReceipt(null);
+                                setLastCompletedReceipt(null);
+                                setPaymentOutcomeStatus(null);
                               }}
                               className="w-full sm:w-auto px-5 py-3 bg-white hover:bg-rose-50 text-rose-900 border border-rose-300 text-xs font-bold rounded-xl cursor-pointer transition"
                             >
@@ -1547,406 +1648,26 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           </div>
                         </div>
                       ) : (
-                        <form
-                          onSubmit={handleConfirmPayment}
-                          className="w-full flex-1 bg-white border border-purple-200 rounded-2xl p-4 sm:p-7 lg:p-10 shadow-xs flex flex-col justify-between space-y-6"
-                        >
-                          {/* Si es otro monto, permitir ajustar el valor */}
-                          {paymentModalType === 'CUOTA_PERSONALIZADA' && (
-                            <div className="p-4 rounded-xl bg-purple-50/60 border border-purple-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                              <div>
-                                <label className="block text-xs font-extrabold text-purple-950 uppercase">
-                                  Otro monto que deseas pagar (COP)
-                                </label>
-                                <p className="text-[11px] text-purple-700">
-                                  Saldo restante actual:{' '}
-                                  <strong>{formatMoney(saldoPendiente)}</strong>
-                                </p>
-                              </div>
-                              <div className="relative w-full sm:w-56">
-                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-purple-700 font-bold text-sm">
-                                  $
-                                </span>
-                                <input
-                                  type="text"
-                                  inputMode="numeric"
-                                  value={
-                                    customPaymentAmount && customPaymentAmount > 0
-                                      ? new Intl.NumberFormat('es-CO', {
-                                          maximumFractionDigits: 0
-                                        }).format(customPaymentAmount)
-                                      : ''
-                                  }
-                                  onChange={e => {
-                                    const raw = e.target.value.replace(/\D/g, '');
-                                    const val = raw ? Number(raw) : 0;
-                                    setCustomPaymentAmount(
-                                      saldoPendiente > 0
-                                        ? Math.min(saldoPendiente, Math.max(0, val))
-                                        : val
-                                    );
-                                  }}
-                                  placeholder="0"
-                                  className="w-full pl-7 pr-3 py-2 rounded-xl bg-white border-2 border-purple-400 text-purple-950 font-mono font-extrabold text-sm focus:border-purple-700 focus:outline-none"
-                                />
-                              </div>
-                            </div>
-                          )}
-
-                          {/* PREGUNTA 1: MEDIO DE PAGO */}
-                          <div className="space-y-3">
-                            <div className="flex items-center gap-2 border-b border-purple-100 pb-2">
-                              <span className="w-6 h-6 rounded-lg bg-purple-700 text-white font-mono text-xs font-extrabold flex items-center justify-center shrink-0">
-                                1
-                              </span>
-                              <label className="text-xs sm:text-sm font-extrabold uppercase tracking-wide text-purple-950">
-                                ¿Por qué medio deseas realizar tu pago?
-                              </label>
-                            </div>
-
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-                              {EFIPAY_CHANNELS.map(ch => {
-                                const isSelected = efipayChannel === ch.id;
-                                return (
-                                  <button
-                                    key={ch.id}
-                                    type="button"
-                                    onClick={() => {
-                                      setEfipayChannel(ch.id);
-                                      setEfipayError(null);
-                                    }}
-                                    className={`p-3.5 rounded-xl border text-left transition cursor-pointer flex flex-col justify-between gap-1.5 ${
-                                      isSelected
-                                        ? 'bg-purple-900 text-white border-purple-950 shadow-xs'
-                                        : 'bg-white text-purple-950 border-purple-200 hover:border-purple-400'
-                                    }`}
-                                  >
-                                    <div className="flex items-center justify-between gap-2">
-                                      <span className="text-xs font-extrabold leading-tight">
-                                        {ch.shortName}
-                                      </span>
-                                      <span
-                                        className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded shrink-0 ${
-                                          isSelected
-                                            ? 'bg-purple-700 text-purple-100'
-                                            : 'bg-purple-50 text-purple-800 border border-purple-200'
-                                        }`}
-                                      >
-                                        {ch.badge}
-                                      </span>
-                                    </div>
-                                    <p
-                                      className={`text-[10px] leading-snug ${
-                                        isSelected
-                                          ? 'text-purple-200'
-                                          : 'text-purple-700/80'
-                                      }`}
-                                    >
-                                      {ch.description}
-                                    </p>
-                                  </button>
-                                );
-                              })}
-                            </div>
-
-                            {/* Datos específicos del medio de pago elegido */}
-                            <div className="p-3.5 sm:p-4 bg-[#fcfaff] border border-purple-200 rounded-xl space-y-3">
-                              {efipayChannel === 'EFIPAY_PSE' && (
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                  <div>
-                                    <label className="block text-[11px] font-bold text-purple-900 mb-1 flex items-center gap-1.5">
-                                      <Building2 className="w-3.5 h-3.5 text-purple-700" />
-                                      <span>Banco PSE ACH</span>
-                                    </label>
-                                    <select
-                                      value={pseBank}
-                                      onChange={e => setPseBank(e.target.value)}
-                                      className="w-full px-3 py-2 rounded-lg bg-white border border-purple-300 text-xs font-semibold text-purple-950 focus:border-purple-700 focus:outline-none"
-                                    >
-                                      {COLOMBIAN_PSE_BANKS.map(bank => (
-                                        <option key={bank} value={bank}>
-                                          {bank}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </div>
-
-                                  <div>
-                                    <label className="block text-[11px] font-bold text-purple-900 mb-1">
-                                      Tipo de Persona Bancaria
-                                    </label>
-                                    <select
-                                      value={psePersonType}
-                                      onChange={e =>
-                                        setPsePersonType(
-                                          e.target.value as
-                                            | 'NATURAL'
-                                            | 'JURIDICA'
-                                        )
-                                      }
-                                      className="w-full px-3 py-2 rounded-lg bg-white border border-purple-300 text-xs font-semibold text-purple-950 focus:border-purple-700 focus:outline-none"
-                                    >
-                                      <option value="NATURAL">
-                                        Persona Natural
-                                      </option>
-                                      <option value="JURIDICA">
-                                        Persona Jurídica / Empresa (NIT)
-                                      </option>
-                                    </select>
-                                  </div>
-                                </div>
-                              )}
-
-                              {efipayChannel === 'EFIPAY_CARD' && (
-                                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-                                  <div className="sm:col-span-2">
-                                    <label className="block text-[11px] font-bold text-purple-900 mb-1 flex items-center gap-1.5">
-                                      <CreditCard className="w-3.5 h-3.5 text-purple-700" />
-                                      <span>Número de Tarjeta</span>
-                                    </label>
-                                    <input
-                                      type="text"
-                                      inputMode="numeric"
-                                      autoComplete="off"
-                                      maxLength={19}
-                                      placeholder="4532 •••• •••• 8492"
-                                      value={cardNumber}
-                                      onChange={e =>
-                                        setCardNumber(
-                                          e.target.value.replace(/[^\d\s]/g, '')
-                                        )
-                                      }
-                                      className="w-full px-3 py-2 rounded-lg bg-white border border-purple-300 text-xs font-mono font-bold text-purple-950 focus:border-purple-700 focus:outline-none"
-                                    />
-                                  </div>
-
-                                  <div>
-                                    <label className="block text-[11px] font-bold text-purple-900 mb-1">
-                                      Vencimiento (MM/AA)
-                                    </label>
-                                    <input
-                                      type="text"
-                                      inputMode="numeric"
-                                      autoComplete="off"
-                                      maxLength={5}
-                                      placeholder="08/29"
-                                      value={cardExpiry}
-                                      onChange={e => {
-                                        let v = e.target.value.replace(
-                                          /\D/g,
-                                          ''
-                                        );
-                                        if (v.length >= 3) {
-                                          v = `${v.slice(0, 2)}/${v.slice(2, 4)}`;
-                                        }
-                                        setCardExpiry(v);
-                                      }}
-                                      className="w-full px-3 py-2 rounded-lg bg-white border border-purple-300 text-xs font-mono font-bold text-purple-950 focus:border-purple-700 focus:outline-none"
-                                    />
-                                  </div>
-
-                                  <div className="grid grid-cols-2 gap-2">
-                                    <div>
-                                      <label className="block text-[11px] font-bold text-purple-900 mb-1">
-                                        CVV
-                                      </label>
-                                      <input
-                                        type="password"
-                                        inputMode="numeric"
-                                        autoComplete="off"
-                                        maxLength={4}
-                                        placeholder="•••"
-                                        value={cardCvv}
-                                        onChange={e =>
-                                          setCardCvv(
-                                            e.target.value.replace(/\D/g, '')
-                                          )
-                                        }
-                                        className="w-full px-2.5 py-2 rounded-lg bg-white border border-purple-300 text-xs font-mono font-bold text-purple-950 focus:border-purple-700 focus:outline-none"
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="block text-[11px] font-bold text-purple-900 mb-1">
-                                        Cuotas
-                                      </label>
-                                      <select
-                                        value={cardInstallments}
-                                        onChange={e =>
-                                          setCardInstallments(
-                                            Number(e.target.value)
-                                          )
-                                        }
-                                        className="w-full px-2 py-2 rounded-lg bg-white border border-purple-300 text-xs font-mono font-bold text-purple-950 focus:border-purple-700 focus:outline-none"
-                                      >
-                                        {[1, 2, 3, 6, 12, 24, 36].map(n => (
-                                          <option key={n} value={n}>
-                                            {n}x
-                                          </option>
-                                        ))}
-                                      </select>
-                                    </div>
-                                  </div>
-                                </div>
-                              )}
-
-                              {(efipayChannel === 'EFIPAY_NEQUI' ||
-                                efipayChannel === 'EFIPAY_BANCOLOMBIA') && (
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
-                                  <div>
-                                    <label className="block text-[11px] font-bold text-purple-900 mb-1 flex items-center gap-1.5">
-                                      <Smartphone className="w-3.5 h-3.5 text-purple-700" />
-                                      <span>
-                                        {efipayChannel === 'EFIPAY_NEQUI'
-                                          ? 'Número Celular Nequi'
-                                          : 'Celular / Cuenta Bancolombia'}
-                                      </span>
-                                    </label>
-                                    <input
-                                      type="tel"
-                                      maxLength={15}
-                                      placeholder="300 000 0000"
-                                      value={walletPhone}
-                                      onChange={e =>
-                                        setWalletPhone(
-                                          e.target.value.replace(
-                                            /[^\d\s+]/g,
-                                            ''
-                                          )
-                                        )
-                                      }
-                                      className="w-full px-3 py-2 rounded-lg bg-white border border-purple-300 text-xs font-mono font-bold text-purple-950 focus:border-purple-700 focus:outline-none"
-                                    />
-                                  </div>
-                                  <div className="text-[11px] text-purple-800 bg-white p-2.5 rounded-lg border border-purple-200">
-                                    Transacción protegida con cifrado de extremo
-                                    a extremo.
-                                  </div>
-                                </div>
-                              )}
-
-                              {efipayChannel === 'EFIPAY_QR' && (
-                                <div className="flex items-center gap-3 p-2 bg-white rounded-lg border border-purple-200">
-                                  <div className="w-10 h-10 rounded-lg bg-purple-900 text-white flex items-center justify-center shrink-0">
-                                    <QrCode className="w-5 h-5" />
-                                  </div>
-                                  <div className="text-xs text-purple-950">
-                                    <strong>
-                                      Orden QR ({paymentReference})
-                                    </strong>{' '}
-                                    — Liquidación inmediata.
-                                  </div>
-                                </div>
-                              )}
-                            </div>
+                        <div className="w-full flex-1 bg-white border border-purple-200 rounded-2xl p-6 sm:p-10 shadow-xs flex flex-col items-center justify-center text-center space-y-5 animate-fadeIn">
+                          <div className="w-12 h-12 rounded-full border-3 border-purple-200 border-t-purple-700 animate-spin" />
+                          <div className="space-y-1.5 max-w-md">
+                            <h4 className="text-lg sm:text-xl font-extrabold text-gray-900 tracking-tight">
+                              Conectando y procesando tu pago...
+                            </h4>
+                            <p className="text-xs sm:text-sm text-gray-500">
+                              Monto a pagar:{' '}
+                              <strong className="text-purple-800 font-bold">
+                                {formatDotCurrency(
+                                  paymentModalType === 'CREDITO_COMPLETO'
+                                    ? saldoPendiente
+                                    : paymentModalType === 'CUOTA_PERSONALIZADA'
+                                    ? customPaymentAmount
+                                    : valorCuotaCard
+                                )}
+                              </strong>
+                            </p>
                           </div>
-
-                          {/* PREGUNTAS 2, 3 Y 4: IDENTIFICACIÓN DEL CLIENTE */}
-                          <div className="space-y-4 pt-2">
-                            <div className="flex items-center gap-2 border-b border-purple-100 pb-2">
-                              <span className="w-6 h-6 rounded-lg bg-purple-700 text-white font-mono text-xs font-extrabold flex items-center justify-center shrink-0">
-                                2
-                              </span>
-                              <span className="text-xs sm:text-sm font-extrabold uppercase tracking-wide text-purple-950">
-                                Datos de Identificación del Pagador
-                              </span>
-                            </div>
-
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                              {/* Nombre Completo */}
-                              <div className="p-3.5 rounded-xl bg-[#fcfaff] border border-purple-200 space-y-1.5">
-                                <label className="block text-[11px] font-extrabold uppercase text-purple-900 flex items-center gap-1.5">
-                                  <UserCheck className="w-3.5 h-3.5 text-purple-700 shrink-0" />
-                                  <span>Nombre Completo</span>
-                                </label>
-                                <input
-                                  type="text"
-                                  required
-                                  value={payerFullName}
-                                  onChange={e =>
-                                    setPayerFullName(e.target.value)
-                                  }
-                                  placeholder="Ej. Valentina Ríos Gómez"
-                                  className="w-full px-3 py-2 rounded-lg bg-white border border-purple-300 text-xs font-bold text-purple-950 focus:border-purple-700 focus:outline-none"
-                                />
-                              </div>
-
-                              {/* Cédula de Ciudadanía */}
-                              <div className="p-3.5 rounded-xl bg-[#fcfaff] border border-purple-200 space-y-1.5">
-                                <label className="block text-[11px] font-extrabold uppercase text-purple-900 flex items-center gap-1.5">
-                                  <ShieldCheck className="w-3.5 h-3.5 text-purple-700 shrink-0" />
-                                  <span>Cédula de Ciudadanía</span>
-                                </label>
-                                <input
-                                  type="text"
-                                  required
-                                  value={payerCedula}
-                                  onChange={e =>
-                                    setPayerCedula(e.target.value)
-                                  }
-                                  placeholder="Ej. 1020304050"
-                                  className="w-full px-3 py-2 rounded-lg bg-white border border-purple-300 text-xs font-mono font-bold text-purple-950 focus:border-purple-700 focus:outline-none"
-                                />
-                              </div>
-
-                              {/* Correo Electrónico */}
-                              <div className="p-3.5 rounded-xl bg-[#fcfaff] border border-purple-200 space-y-1.5">
-                                <label className="block text-[11px] font-extrabold uppercase text-purple-900 flex items-center gap-1.5">
-                                  <Mail className="w-3.5 h-3.5 text-purple-700 shrink-0" />
-                                  <span>Correo Electrónico</span>
-                                </label>
-                                <input
-                                  type="email"
-                                  required
-                                  value={payerEmail}
-                                  onChange={e => setPayerEmail(e.target.value)}
-                                  placeholder="correo@ejemplo.com"
-                                  className="w-full px-3 py-2 rounded-lg bg-white border border-purple-300 text-xs font-bold text-purple-950 focus:border-purple-700 focus:outline-none"
-                                />
-                              </div>
-                            </div>
-                          </div>
-
-                          {efipayError && (
-                            <div className="p-3.5 bg-rose-50 border border-rose-300 rounded-xl text-xs font-bold text-rose-800 flex items-center gap-2">
-                              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-                              <span>{efipayError}</span>
-                            </div>
-                          )}
-
-                          {/* Botones de Acción */}
-                          <div className="pt-3 border-t border-purple-100 flex flex-col-reverse sm:flex-row items-center justify-between gap-3">
-                            <button
-                              type="button"
-                              disabled={isProcessingPayment}
-                              onClick={handleCancelPaymentGateway}
-                              className="w-full sm:w-auto px-5 py-3 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 text-xs font-extrabold rounded-xl cursor-pointer transition flex items-center justify-center gap-1.5"
-                            >
-                              <XCircle className="w-4 h-4 shrink-0" />
-                              <span>Cancelar Pago</span>
-                            </button>
-
-                            <button
-                              type="submit"
-                              disabled={isProcessingPayment}
-                              className="w-full sm:w-auto px-6 py-3.5 bg-purple-700 hover:bg-purple-800 text-white text-xs sm:text-sm font-extrabold rounded-xl border border-purple-900 cursor-pointer flex items-center justify-center gap-2 shadow-xs transition"
-                            >
-                              <Lock className="w-4 h-4 shrink-0" />
-                              <span>
-                                {isProcessingPayment
-                                  ? 'Procesando pago...'
-                                  : `Confirmar y Pagar (${formatDotCurrency(
-                                      paymentModalType === 'CREDITO_COMPLETO'
-                                        ? saldoPendiente
-                                        : paymentModalType ===
-                                          'CUOTA_PERSONALIZADA'
-                                        ? customPaymentAmount
-                                        : valorCuotaCard
-                                    )})`}
-                              </span>
-                              <ArrowRight className="w-4 h-4 shrink-0" />
-                            </button>
-                          </div>
-                        </form>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -2020,6 +1741,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
               setIsPaySelectionWindowOpen(false);
               setIsCustomAmountExpanded(false);
               setPaymentModalType(null);
+              setEfipayReceipt(null);
+              setLastCompletedReceipt(null);
+              setPaymentOutcomeStatus(null);
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             className={`flex flex-col items-center justify-center gap-1 px-4 py-1 rounded-xl transition cursor-pointer ${
@@ -2040,6 +1764,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
               setIsPaySelectionWindowOpen(false);
               setIsCustomAmountExpanded(false);
               setPaymentModalType(null);
+              setEfipayReceipt(null);
+              setLastCompletedReceipt(null);
+              setPaymentOutcomeStatus(null);
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             className={`flex flex-col items-center justify-center gap-1 px-4 py-1 rounded-xl transition cursor-pointer ${
@@ -2052,6 +1779,29 @@ export const Dashboard: React.FC<DashboardProps> = ({
             <span className="text-[11px] sm:text-xs leading-none">
               Actividad
             </span>
+          </button>
+
+          {/* 3. Icono de usuario (sin letras) para los datos personales del cliente */}
+          <button
+            type="button"
+            aria-label="Datos personales del cliente"
+            onClick={() => {
+              setActiveBottomSection('PERFIL');
+              setIsPaySelectionWindowOpen(false);
+              setIsCustomAmountExpanded(false);
+              setPaymentModalType(null);
+              setEfipayReceipt(null);
+              setLastCompletedReceipt(null);
+              setPaymentOutcomeStatus(null);
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            className={`flex items-center justify-center p-2 rounded-xl transition cursor-pointer ${
+              activeBottomSection === 'PERFIL'
+                ? 'text-purple-700 font-bold'
+                : 'text-gray-500 hover:text-gray-900 font-medium'
+            }`}
+          >
+            <UserIcon className="w-5 h-5" />
           </button>
         </div>
       </main>
