@@ -30,7 +30,9 @@ import {
   Briefcase,
   Layers,
   UserPlus,
-  Lock
+  Lock,
+  Image as ImageIcon,
+  Upload
 } from 'lucide-react';
 import { exportAuditTrailToProtectedPDF, PDF_EXPORT_PASSWORD } from '../services/pdfExportService';
 
@@ -47,6 +49,7 @@ type LeftActionKey =
   | 'QUICK_PAYMENT'
   | 'NEW_RECORD'
   | 'LOAN_POLICIES'
+  | 'AD_POSTERS'
   | 'WORKERS_TEAM'
   | 'AUDIT_LEDGER';
 
@@ -153,7 +156,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [batchCreditStatus, setBatchCreditStatus] = useState<CreditStatus>('ASIGNADO');
   const [batchCreditLimit, setBatchCreditLimit] = useState<string>('');
 
-  // Formulario de Nuevo Registro
+  // Formulario de Nuevo Registro y Desglose de Crédito Fijo
   const [newRecordRole, setNewRecordRole] = useState<'CLIENT' | 'WORKER'>('CLIENT');
   const [newCedula, setNewCedula] = useState<string>('');
   const [newFullName, setNewFullName] = useState<string>('');
@@ -161,16 +164,33 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [newPhone, setNewPhone] = useState<string>('');
   const [newPassword, setNewPassword] = useState<string>('Password123!');
   const [newLimit, setNewLimit] = useState<string>('12000000');
-  const [newDebt, setNewDebt] = useState<string>('4500000');
+  const [newDebt, setNewDebt] = useState<string>('12000000');
   const [newTermMonths, setNewTermMonths] = useState<string>('12');
+  const [newInterestRate, setNewInterestRate] = useState<string>('1.85');
+  const [newFianzaRate, setNewFianzaRate] = useState<string>('3.5');
+  const [newSignatureFee, setNewSignatureFee] = useState<string>('28500');
+  const [newCollectionExpenses, setNewCollectionExpenses] = useState<string>('0');
+  const [newIvaRate, setNewIvaRate] = useState<string>('19');
+  const [newPaymentDeadline, setNewPaymentDeadline] = useState<string>('Día 05 (2026-11-05)');
   const [newWorkerPerms, setNewWorkerPerms] = useState<WorkerPermission[]>([
     'VER_CARTERA',
     'APROBAR_CREDITOS',
     'REGISTRAR_PAGOS'
   ]);
 
+  // Estado para crear un nuevo crédito fijo a un cliente que ya terminó su crédito anterior (PAZ_Y_SALVO)
+  const [inlineNewCreditPrincipal, setInlineNewCreditPrincipal] = useState<Record<string, string>>({});
+  const [inlineNewCreditTerm, setInlineNewCreditTerm] = useState<Record<string, string>>({});
+  const [inlineNewCreditCollection, setInlineNewCreditCollection] = useState<Record<string, string>>({});
+  const [inlineNewCreditDeadline, setInlineNewCreditDeadline] = useState<Record<string, string>>({});
+
   // Filtro de Auditoría
   const [auditSearch, setAuditSearch] = useState<string>('');
+
+  // Estado para URL o imagen del Poster Publicitario
+  const [posterUrlInput, setPosterUrlInput] = useState<string>(
+    StorageService.getLoanSettings().adPosterUrl || ''
+  );
 
   const showTransientBanner = (
     type: 'emerald' | 'amber' | 'coral' | 'cyan' | 'teal',
@@ -210,7 +230,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setIsChainValid(valid);
     setRegulatoryLogs(regAuditData?.logs || []);
     setIsRegulatoryCompliant(regAuditData?.isCompliant !== false);
-    setLoanSettings(StorageService.getLoanSettings());
+    const latestSettings = StorageService.getLoanSettings();
+    setLoanSettings(latestSettings);
+    setPosterUrlInput(latestSettings.adPosterUrl || '');
 
     setAssignedOperators(prev => {
       const next = { ...prev };
@@ -285,11 +307,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     };
   }, [clientUsers]);
 
-  // Lista de botones de acción de la barra izquierda filtrada según permisos
+  // Lista de bloques principales de la barra izquierda filtrada según permisos
   const availableSidebarActions = useMemo(() => {
     const allActions: {
       key: LeftActionKey;
       label: string;
+      subtitle: string;
       icon: any;
       badge: string | number;
       allowed: boolean;
@@ -297,6 +320,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {
         key: 'ALL_PORTFOLIO',
         label: 'Cartera General',
+        subtitle: 'Control y edición de clientes',
         icon: Layers,
         badge: portfolioSummary.totalClients,
         allowed:
@@ -307,6 +331,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {
         key: 'APPROVE_PENDING',
         label: 'Aprobar / Desembolsos',
+        subtitle: 'Solicitudes y giros bancarios',
         icon: CheckCircle2,
         badge:
           portfolioSummary.pendienteCount + portfolioSummary.enDesembolsoCount,
@@ -318,6 +343,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {
         key: 'OVERDUE_COLLECTION',
         label: 'Cobranza y Mora',
+        subtitle: 'Seguimiento de cartera vencida',
         icon: AlertTriangle,
         badge: portfolioSummary.enMoraCount,
         allowed: isAdmin || hasAccess('GESTIONAR_MORA')
@@ -325,6 +351,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {
         key: 'QUICK_PAYMENT',
         label: 'Registrar Abono',
+        subtitle: 'Caja rápida y paz y salvo',
         icon: DollarSign,
         badge: 'Caja',
         allowed: isAdmin || hasAccess('REGISTRAR_PAGOS')
@@ -332,6 +359,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {
         key: 'NEW_RECORD',
         label: isAdmin ? 'Crear Usuario' : 'Crear Cliente',
+        subtitle: isAdmin ? 'Alta de clientes y trabajadores' : 'Registro de nuevo cliente',
         icon: UserPlus,
         badge: '+',
         allowed: isAdmin || hasAccess('CREAR_USUARIOS')
@@ -339,13 +367,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {
         key: 'LOAN_POLICIES',
         label: 'Tasas y Cupos',
+        subtitle: 'Intereses, mora, IVA y topes',
         icon: Sliders,
         badge: `${loanSettings.monthlyInterestRate}%`,
         allowed: isAdmin || hasAccess('CONFIGURAR_SISTEMA')
       },
       {
+        key: 'AD_POSTERS',
+        label: 'Posters Publicitarios',
+        subtitle: 'Imagen o URL en dashboard',
+        icon: ImageIcon,
+        badge: loanSettings.adPosterUrl ? 'Activo' : 'Vacío',
+        allowed: isAdmin || hasAccess('CONFIGURAR_SISTEMA')
+      },
+      {
         key: 'WORKERS_TEAM',
         label: 'Trabajadores y Accesos',
+        subtitle: 'Permisos y claves del equipo',
         icon: Users,
         badge: workerUsers.length,
         allowed: isAdmin // Exclusivo del Administrador
@@ -353,6 +391,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {
         key: 'AUDIT_LEDGER',
         label: 'Auditoría PDF',
+        subtitle: 'Bitácora cifrada y reporte',
         icon: History,
         badge: auditChain.length,
         allowed: isAdmin || hasAccess('VER_AUDITORIA')
@@ -365,6 +404,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     liveCurrentUser,
     portfolioSummary,
     loanSettings.monthlyInterestRate,
+    loanSettings.adPosterUrl,
     workerUsers.length,
     auditChain.length
   ]);
@@ -464,8 +504,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     return false;
   };
 
+  const LOCKED_CREDIT_FIELDS: ActiveCellEdit['field'][] = [
+    'creditLimit',
+    'availableBalance',
+    'customInstallmentAmount',
+    'loanTermMonths',
+    'nextPaymentDate',
+    'interestRateApplied',
+    'taxPercentageApplied',
+    'creditStatus',
+    'creditTramiteId'
+  ];
+
   // ===========================================================================
-  // EDICIÓN DIRECTA EN CELDA (ADMIN EDITA TODO DE TODOS; TRABAJADOR SEGÚN ACCESO)
+  // EDICIÓN DIRECTA EN CELDA (BLOQUEADA EN CAMPOS DE CRÉDITO MIENTRAS ESTÉ ACTIVO)
   // ===========================================================================
   const startCellEdit = (
     user: User,
@@ -474,6 +526,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   ) => {
     if (!canEditField(field)) {
       showTransientBanner('amber', 'Sin permiso para editar este campo');
+      return;
+    }
+
+    if (
+      StorageService.isCreditActiveAndLocked(user) &&
+      LOCKED_CREDIT_FIELDS.includes(field)
+    ) {
+      showTransientBanner(
+        'amber',
+        '🔒 Crédito activo fijado: No se puede editar, borrar ni cambiar mientras esté el crédito activo'
+      );
       return;
     }
 
@@ -607,13 +670,50 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   // ===========================================================================
-  // ACCIONES RÁPIDAS EN 1 CLIC
+  // ACCIONES RÁPIDAS EN 1 CLIC (RESPETANDO EL BLOQUEO DE CRÉDITO ACTIVO)
   // ===========================================================================
   const handleQuickStatusChange = async (
     user: User,
     newCreditStatus: CreditStatus,
     newPaymentStatus?: PaymentTimeStatus
   ) => {
+    if (
+      StorageService.isCreditActiveAndLocked(user) &&
+      newCreditStatus !== 'ASIGNADO'
+    ) {
+      showTransientBanner(
+        'amber',
+        '🔒 Crédito activo fijado: No se puede borrar, rechazar ni cambiar el crédito mientras esté activo'
+      );
+      return;
+    }
+
+    if (
+      user.creditStatus === 'PENDIENTE' &&
+      newCreditStatus === 'ASIGNADO'
+    ) {
+      const approveRes = await StorageService.approveUserCredit(
+        user.id,
+        user.creditLimit > 0 ? user.creditLimit : 10000000,
+        liveCurrentUser.fullName
+      );
+      if (approveRes.success) {
+        await fintechPanelsEngine.encryptAndBroadcastChange({
+          action: 'CREDIT_APPROVED_AND_LOCKED',
+          userId: user.id
+        });
+        await loadWorkspaceData();
+        triggerCellFlash(user.id, 'creditStatus');
+        showTransientBanner(
+          'emerald',
+          `Crédito aprobado y fijado para ${user.fullName}`
+        );
+      } else {
+        showTransientBanner('coral', approveRes.message);
+      }
+      return;
+    }
+
     const limit =
       newCreditStatus === 'ASIGNADO' && (!user.creditLimit || user.creditLimit === 0)
         ? 10000000
@@ -661,6 +761,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       triggerCellFlash(user.id, 'creditStatus');
       triggerCellFlash(user.id, 'paymentStatus');
       showTransientBanner('emerald', `Actualizado: ${user.fullName}`);
+    } else {
+      showTransientBanner('coral', res.message);
     }
   };
 
@@ -728,9 +830,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   ) => {
     if (selectedIdsList.length === 0) return;
 
+    let updatedCount = 0;
+    let lockedSkippedCount = 0;
+
     for (const uid of selectedIdsList) {
       const u = users.find(item => item.id === uid);
       if (!u) continue;
+
+      if (
+        StorageService.isCreditActiveAndLocked(u) &&
+        (mode === 'CREDIT_STATUS' || mode === 'CREDIT_LIMIT')
+      ) {
+        lockedSkippedCount++;
+        continue;
+      }
 
       const newPaymentStatus =
         mode === 'PAYMENT_STATUS' ? batchPaymentStatus : u.paymentStatus || 'AL_DIA';
@@ -741,7 +854,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             : 0
           : u.daysOverdue || 0;
 
-      await StorageService.updateUserCompleteData(
+      const res = await StorageService.updateUserCompleteData(
         u.id,
         {
           cedula: u.cedula,
@@ -764,24 +877,34 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         },
         `${liveCurrentUser.fullName} [LOTE]`
       );
-      triggerCellFlash(
-        uid,
-        mode === 'PAYMENT_STATUS'
-          ? 'paymentStatus'
-          : mode === 'CREDIT_STATUS'
-          ? 'creditStatus'
-          : 'creditLimit'
-      );
+      if (res.success) {
+        updatedCount++;
+        triggerCellFlash(
+          uid,
+          mode === 'PAYMENT_STATUS'
+            ? 'paymentStatus'
+            : mode === 'CREDIT_STATUS'
+            ? 'creditStatus'
+            : 'creditLimit'
+        );
+      }
     }
 
     await fintechPanelsEngine.encryptAndBroadcastChange({
       batchMode: mode,
-      affectedCount: selectedIdsList.length,
+      affectedCount: updatedCount,
       editor: liveCurrentUser.fullName
     });
 
     await loadWorkspaceData();
-    showTransientBanner('emerald', `${selectedIdsList.length} clientes actualizados`);
+    if (lockedSkippedCount > 0) {
+      showTransientBanner(
+        'amber',
+        `${updatedCount} actualizados • ${lockedSkippedCount} omitidos por tener crédito activo fijo`
+      );
+    } else {
+      showTransientBanner('emerald', `${updatedCount} clientes actualizados`);
+    }
   };
 
   // ===========================================================================
@@ -940,6 +1063,136 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
+  const handleSaveAdPosterUrl = async (urlToSave: string) => {
+    if (!isAdmin && !hasAccess('CONFIGURAR_SISTEMA')) return;
+    const cleanUrl = urlToSave.trim();
+    const updated = {
+      ...loanSettings,
+      adPosterUrl: cleanUrl
+    };
+    setLoanSettings(updated);
+    setPosterUrlInput(cleanUrl);
+    const res = await StorageService.updateLoanSettings(
+      { adPosterUrl: cleanUrl },
+      liveCurrentUser.fullName
+    );
+    if (res.success) {
+      await fintechPanelsEngine.encryptAndBroadcastChange({
+        action: 'AD_POSTER_UPDATED',
+        adPosterUrl: cleanUrl
+      });
+      await loadWorkspaceData();
+      showTransientBanner(
+        'emerald',
+        cleanUrl
+          ? 'Poster publicitario actualizado en el panel de clientes'
+          : 'Poster publicitario eliminado'
+      );
+    }
+  };
+
+  const handleAdPosterFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showTransientBanner('amber', 'Seleccione un archivo de imagen válido');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = async () => {
+      if (typeof reader.result === 'string') {
+        await handleSaveAdPosterUrl(reader.result);
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  // Vista previa en vivo del desglose financiero al crear un cliente nuevo
+  const previewNewClientBreakdown = useMemo(() => {
+    return StorageService.buildFixedLoanBreakdown({
+      principalAmount: Math.max(500000, Number(newLimit) || 10000000),
+      termMonths: Math.max(1, Number(newTermMonths) || 12),
+      interestRatePercentage: Math.max(0, Number(newInterestRate) || loanSettings.monthlyInterestRate || 1.85),
+      fianzaPercentage: Math.max(0, Number(newFianzaRate) || loanSettings.fianzaPercentage || 3.5),
+      electronicSignatureFee: Math.max(0, Number(newSignatureFee) || loanSettings.electronicSignatureFee || 28500),
+      collectionExpenses: Math.max(0, Number(newCollectionExpenses) || 0),
+      ivaPercentage: Math.max(0, Number(newIvaRate) || loanSettings.taxPercentage || 19),
+      paymentDeadline: newPaymentDeadline || 'Día 05 (2026-11-05)'
+    });
+  }, [
+    newLimit,
+    newTermMonths,
+    newInterestRate,
+    newFianzaRate,
+    newSignatureFee,
+    newCollectionExpenses,
+    newIvaRate,
+    newPaymentDeadline,
+    loanSettings
+  ]);
+
+  const handleCreateAndLockNewClientCredit = async (user: User) => {
+    if (!isAdmin && !hasAccess('APROBAR_CREDITOS') && !hasAccess('EDITAR_CLIENTES')) {
+      showTransientBanner('amber', 'Sin permiso para crear y fijar un crédito');
+      return;
+    }
+    if (StorageService.isCreditActiveAndLocked(user)) {
+      showTransientBanner(
+        'amber',
+        '🔒 El cliente ya tiene un crédito activo fijado; no se puede cambiar hasta finalizar el pago'
+      );
+      return;
+    }
+
+    const principal = Math.max(
+      500000,
+      Number(inlineNewCreditPrincipal[user.id]) || user.creditLimit || 10000000
+    );
+    const term = Math.max(
+      1,
+      Number(inlineNewCreditTerm[user.id]) || user.loanTermMonths || 12
+    );
+    const collection = Math.max(
+      0,
+      Number(inlineNewCreditCollection[user.id]) || 0
+    );
+    const deadline =
+      inlineNewCreditDeadline[user.id] ||
+      user.nextPaymentDate ||
+      'Día 05 (2026-11-05)';
+
+    const res = await StorageService.createAndLockClientCredit(
+      user.id,
+      {
+        principalAmount: principal,
+        termMonths: term,
+        interestRatePercentage:
+          user.interestRateApplied ?? loanSettings.monthlyInterestRate,
+        fianzaPercentage: loanSettings.fianzaPercentage ?? 3.5,
+        electronicSignatureFee: loanSettings.electronicSignatureFee ?? 28500,
+        collectionExpenses: collection,
+        ivaPercentage: user.taxPercentageApplied ?? loanSettings.taxPercentage,
+        paymentDeadline: deadline
+      },
+      liveCurrentUser.fullName
+    );
+
+    if (res.success) {
+      await fintechPanelsEngine.encryptAndBroadcastChange({
+        action: 'NEW_CREDIT_CREATED_AND_LOCKED',
+        userId: user.id,
+        principalAmount: principal
+      });
+      await loadWorkspaceData();
+      triggerCellFlash(user.id, 'creditLimit');
+      triggerCellFlash(user.id, 'availableBalance');
+      showTransientBanner('emerald', res.message);
+    } else {
+      showTransientBanner('coral', res.message);
+    }
+  };
+
   const handleCreateInlineRecord = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCedula.trim() || !newFullName.trim()) {
@@ -975,32 +1228,29 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return;
     }
 
+    // Crear el cliente inicialmente en estado PENDIENTE y enseguida fijar su crédito con los 8 componentes
     const reg = await StorageService.registerUser({
       cedula: newCedula.trim(),
       fullName: newFullName.trim(),
       email: newEmail.trim() || `${newCedula.trim()}@cliente.co`,
       phone: newPhone.trim() || '+57 310 000 0000',
       password: newPassword || 'Password123!',
-      creditStatus: 'ASIGNADO',
+      creditStatus: 'PENDIENTE',
       initialBalance: Number(newLimit) || 10000000
     });
 
     if (reg.success && reg.user) {
-      await StorageService.updateUserCompleteData(
+      await StorageService.createAndLockClientCredit(
         reg.user.id,
         {
-          cedula: reg.user.cedula,
-          fullName: reg.user.fullName,
-          email: reg.user.email,
-          phone: reg.user.phone,
-          isActive: true,
-          creditStatus: 'ASIGNADO',
-          creditTramiteId: reg.user.creditTramiteId,
-          creditLimit: Number(newLimit) || 10000000,
-          availableBalance: Number(newDebt) || 0,
-          loanTermMonths: Number(newTermMonths) || 12,
-          paymentStatus: 'AL_DIA',
-          daysOverdue: 0
+          principalAmount: previewNewClientBreakdown.principalAmount,
+          termMonths: previewNewClientBreakdown.termMonths,
+          interestRatePercentage: previewNewClientBreakdown.interestRatePercentage,
+          fianzaPercentage: previewNewClientBreakdown.fianzaPercentage,
+          electronicSignatureFee: previewNewClientBreakdown.electronicSignatureFee,
+          collectionExpenses: previewNewClientBreakdown.collectionExpenses,
+          ivaPercentage: previewNewClientBreakdown.ivaPercentage,
+          paymentDeadline: previewNewClientBreakdown.paymentDeadline
         },
         liveCurrentUser.fullName
       );
@@ -1009,12 +1259,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setNewEmail('');
       setNewPhone('');
       await fintechPanelsEngine.encryptAndBroadcastChange({
-        action: 'INLINE_CLIENT_CREATED',
+        action: 'INLINE_CLIENT_CREATED_AND_LOCKED',
         cedula: reg.user.cedula
       });
       await loadWorkspaceData();
       setActiveAction('ALL_PORTFOLIO');
-      showTransientBanner('emerald', `Cliente creado: ${reg.user.fullName}`);
+      showTransientBanner(
+        'emerald',
+        `Cliente creado con crédito fijado e inmutable: ${reg.user.fullName}`
+      );
     } else {
       showTransientBanner('coral', reg.message);
     }
@@ -1128,29 +1381,44 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const accentColor = isAdmin ? '#6D28D9' : '#0D9488';
 
+  const activeActionMeta =
+    availableSidebarActions.find(a => a.key === activeAction) ||
+    availableSidebarActions[0];
+
   return (
     <div className="fintech-flat-workspace">
       {/* =====================================================================
-          BARRA SUPERIOR CLARA Y COMPACTA (SIN VISTA DOBLE)
+          BARRA SUPERIOR INSTITUCIONAL (ADMIN Y TRABAJADORES)
          ===================================================================== */}
       <header className="fintech-CommandBar bg-purple-900 border-b border-purple-800 text-white">
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-3">
           <img
             src={`${import.meta.env.BASE_URL}assets/aistudio/logo-bordered.png`}
             alt="Logo"
-            className="h-5 sm:h-6 w-auto object-contain select-none shrink-0"
+            className="h-6 w-auto object-contain select-none shrink-0"
           />
-          <div>
-            <div className="flex items-center gap-2">
-              <span className={`status-tag ${isAdmin ? 'bg-purple-950 text-purple-200 border border-purple-700' : 'bg-teal-950 text-teal-200 border border-teal-700'}`}>
-                {isAdmin ? 'ADMINISTRADOR (CONTROL TOTAL)' : 'TRABAJADOR'}
+          <div className="border-l border-purple-700/80 pl-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span
+                className={`status-tag ${
+                  isAdmin
+                    ? 'bg-purple-950 text-purple-200 border border-purple-700'
+                    : 'bg-teal-950 text-teal-200 border border-teal-700'
+                }`}
+              >
+                {isAdmin ? 'PANEL ADMINISTRADOR' : 'PANEL TRABAJADOR'}
               </span>
+              {activeActionMeta && (
+                <span className="text-xs font-bold text-white">
+                  • {activeActionMeta.label}
+                </span>
+              )}
             </div>
             <div className="text-[11px] text-purple-200 mt-0.5">
-              {liveCurrentUser.fullName} • {liveCurrentUser.cedula}
+              {liveCurrentUser.fullName} ({liveCurrentUser.cedula})
               {isWorker && (
                 <span className="ml-2 text-teal-200 font-semibold">
-                  • {(liveCurrentUser.workerPermissions || []).length} accesos habilitados
+                  • {(liveCurrentUser.workerPermissions || []).length} bloques habilitados
                 </span>
               )}
             </div>
@@ -1168,75 +1436,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           <button
             type="button"
             onClick={onLogout}
-            className="px-3 py-1.5 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer rounded shadow-xs"
+            className="px-3.5 py-1.5 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer rounded shadow-xs"
           >
             <LogOut className="w-3.5 h-3.5" />
-            <span>Salir</span>
+            <span>Cerrar Sesión</span>
           </button>
         </div>
       </header>
 
       {/* =====================================================================
-          CINTA SUPERIOR DE DATOS CLAVE
-         ===================================================================== */}
-      <section className="fintech-kpi-strip">
-        <div className="fintech-kpi-cell">
-          <span className="fintech-kpi-label">Clientes</span>
-          <span className="fintech-kpi-value">{portfolioSummary.totalClients}</span>
-        </div>
-        <div className="fintech-kpi-cell">
-          <span className="fintech-kpi-label">Al Día</span>
-          <span className="fintech-kpi-value text-emerald-600">
-            {portfolioSummary.alDiaCount}
-          </span>
-        </div>
-        <div className="fintech-kpi-cell">
-          <span className="fintech-kpi-label">En Mora</span>
-          <span className="fintech-kpi-value text-rose-600">
-            {portfolioSummary.enMoraCount}
-          </span>
-        </div>
-        <div className="fintech-kpi-cell">
-          <span className="fintech-kpi-label">Pendientes</span>
-          <span className="fintech-kpi-value text-amber-600">
-            {portfolioSummary.pendienteCount}
-          </span>
-        </div>
-        <div className="fintech-kpi-cell">
-          <span className="fintech-kpi-label">Cupo Total</span>
-          <span className="fintech-kpi-value text-purple-700">
-            {formatCOP(portfolioSummary.totalCupo)}
-          </span>
-        </div>
-        <div className="fintech-kpi-cell">
-          <span className="fintech-kpi-label">Deuda Activa</span>
-          <span className="fintech-kpi-value text-slate-900">
-            {formatCOP(portfolioSummary.totalDeuda)}
-          </span>
-        </div>
-        <div className="fintech-kpi-cell">
-          <span className="fintech-kpi-label">Recaudado</span>
-          <span className="fintech-kpi-value text-emerald-700">
-            {formatCOP(portfolioSummary.totalRecaudado)}
-          </span>
-        </div>
-        <div className="fintech-kpi-cell">
-          <span className="fintech-kpi-label">Tasa / Mora / IVA</span>
-          <span className="fintech-kpi-value text-xs pt-1">
-            {loanSettings.monthlyInterestRate}% · {loanSettings.lateFeePercentage}% ·{' '}
-            {loanSettings.taxPercentage}%
-          </span>
-        </div>
-      </section>
-
-      {/* =====================================================================
-          ESTRUCTURA PRINCIPAL CON BOTONES DE ACCIÓN A LA IZQUIERDA
+          ESTRUCTURA PRINCIPAL: BLOQUES A LA IZQUIERDA UNO DEBAJO DE OTRO
+          + CONTENIDO ORGANIZADO A LA DERECHA
          ===================================================================== */}
       <div className="fintech-shell-layout">
-        {/* BARRA LATERAL IZQUIERDA: SOLO MUESTRA ACCIONES CON ACCESO */}
+        {/* COLUMNA IZQUIERDA: BLOQUES PRINCIPALES UNO DEBAJO DE OTRO */}
         <aside className="fintech-left-sidebar">
-          <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-            {isAdmin ? 'Control Administrador' : 'Acciones Autorizadas'}
+          <div className="px-2 pb-1.5 border-b border-slate-200 flex items-center justify-between">
+            <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-700">
+              {isAdmin ? 'Bloques Principales' : 'Bloques Autorizados'}
+            </span>
+            <span className="text-[10px] font-mono font-bold text-slate-400">
+              {availableSidebarActions.length} módulos
+            </span>
           </div>
 
           {availableSidebarActions.length === 0 ? (
@@ -1244,7 +1465,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               Sin accesos asignados por el Administrador.
             </div>
           ) : (
-            availableSidebarActions.map(item => {
+            availableSidebarActions.map((item, idx) => {
               const Icon = item.icon;
               const isActive = activeAction === item.key;
               const activeClass = isActive
@@ -1270,19 +1491,128 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   }}
                   className={`sidebar-action-btn ${activeClass}`}
                 >
-                  <span className="flex items-center gap-2">
-                    <Icon className="w-4 h-4 shrink-0" />
-                    <span>{item.label}</span>
+                  <span className="flex items-start gap-2.5 min-w-0">
+                    <span
+                      className={`w-7 h-7 flex items-center justify-center shrink-0 border ${
+                        isActive
+                          ? isAdmin
+                            ? 'bg-purple-700 text-white border-purple-700'
+                            : 'bg-teal-600 text-white border-teal-600'
+                          : 'bg-white text-slate-600 border-slate-200'
+                      }`}
+                    >
+                      <Icon className="w-3.5 h-3.5" />
+                    </span>
+                    <span className="flex flex-col min-w-0">
+                      <span className="text-xs font-bold leading-tight truncate">
+                        {idx + 1}. {item.label}
+                      </span>
+                      <span className="text-[10px] font-normal text-slate-500 leading-tight truncate mt-0.5">
+                        {item.subtitle}
+                      </span>
+                    </span>
                   </span>
                   <span className="sidebar-count-badge">{item.badge}</span>
                 </button>
               );
             })
           )}
+
+          {/* Resumen vertical consolidado en la parte inferior de la barra izquierda */}
+          <div className="mt-2 pt-3 border-t border-slate-200 space-y-2">
+            <div className="px-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+              Resumen de Cartera
+            </div>
+            <div className="bg-slate-50 border border-slate-200 p-2.5 space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-slate-500">Cupo Total</span>
+                <span className="font-mono font-bold text-purple-700">
+                  {formatCOP(portfolioSummary.totalCupo)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-slate-500">Deuda Activa</span>
+                <span className="font-mono font-bold text-slate-900">
+                  {formatCOP(portfolioSummary.totalDeuda)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-slate-500">Recaudado</span>
+                <span className="font-mono font-bold text-emerald-700">
+                  {formatCOP(portfolioSummary.totalRecaudado)}
+                </span>
+              </div>
+              <div className="pt-1.5 border-t border-slate-200 flex items-center justify-between text-[10px] font-mono text-slate-600">
+                <span>Tasa: {loanSettings.monthlyInterestRate}%</span>
+                <span>Mora: {loanSettings.lateFeePercentage}%</span>
+                <span>IVA: {loanSettings.taxPercentage}%</span>
+              </div>
+            </div>
+          </div>
         </aside>
 
-        {/* CONTENIDO DERECHO QUE SE DESPLAZA SEGÚN LA ACCIÓN SELECCIONADA */}
-        <main className="flex-1 p-4 overflow-x-hidden space-y-4">
+        {/* CONTENIDO DERECHO ORGANIZADO POR BLOQUES DE INFORMACIÓN */}
+        <main className="flex-1 p-4 sm:p-5 overflow-x-hidden space-y-4">
+          {/* BLOQUE SUPERIOR DE MÉTRICAS ORGANIZADAS EN 4 TARJETAS PRINCIPALES */}
+          <section className="fintech-kpi-strip">
+            <div className="fintech-kpi-cell">
+              <div className="flex items-center justify-between">
+                <span className="fintech-kpi-label">Total Clientes</span>
+                <span className="status-tag emerald">
+                  {portfolioSummary.alDiaCount} Al Día
+                </span>
+              </div>
+              <span className="fintech-kpi-value">{portfolioSummary.totalClients}</span>
+              <span className="text-[11px] text-slate-500">
+                Cartera registrada en plataforma
+              </span>
+            </div>
+
+            <div className="fintech-kpi-cell">
+              <div className="flex items-center justify-between">
+                <span className="fintech-kpi-label">Atención Prioritaria</span>
+                <span className="status-tag amber">
+                  {portfolioSummary.pendienteCount + portfolioSummary.enDesembolsoCount}{' '}
+                  Por Aprobar
+                </span>
+              </div>
+              <span className="fintech-kpi-value text-rose-600">
+                {portfolioSummary.enMoraCount} en Mora
+              </span>
+              <span className="text-[11px] text-slate-500">
+                {portfolioSummary.enDesembolsoCount} en proceso de desembolso
+              </span>
+            </div>
+
+            <div className="fintech-kpi-cell">
+              <div className="flex items-center justify-between">
+                <span className="fintech-kpi-label">Deuda Activa en Calle</span>
+                <span className="status-tag cyan">Cupo Asignado</span>
+              </div>
+              <span className="fintech-kpi-value text-slate-900">
+                {formatCOP(portfolioSummary.totalDeuda)}
+              </span>
+              <span className="text-[11px] font-mono text-purple-700 font-semibold">
+                Cupo Total: {formatCOP(portfolioSummary.totalCupo)}
+              </span>
+            </div>
+
+            <div className="fintech-kpi-cell">
+              <div className="flex items-center justify-between">
+                <span className="fintech-kpi-label">Capital Recaudado</span>
+                <span className="status-tag teal">
+                  {loanSettings.monthlyInterestRate}% EM
+                </span>
+              </div>
+              <span className="fintech-kpi-value text-emerald-700">
+                {formatCOP(portfolioSummary.totalRecaudado)}
+              </span>
+              <span className="text-[11px] font-mono text-slate-500">
+                Mora {loanSettings.lateFeePercentage}% · IVA {loanSettings.taxPercentage}%
+              </span>
+            </div>
+          </section>
+
           {availableSidebarActions.length === 0 ? (
             <div className="bg-white border border-slate-200 p-8 text-center space-y-2">
               <Lock className="w-7 h-7 text-amber-600 mx-auto" />
@@ -1295,6 +1625,34 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </div>
           ) : (
             <>
+              {/* ENCABEZADO DEL BLOQUE ACTIVO */}
+              {activeActionMeta && (
+                <div className="bg-white border border-slate-200 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={`w-8 h-8 flex items-center justify-center text-white font-bold ${
+                        isAdmin ? 'bg-purple-700' : 'bg-teal-600'
+                      }`}
+                    >
+                      <activeActionMeta.icon className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h2 className="text-sm font-extrabold text-slate-900 leading-tight">
+                        {activeActionMeta.label}
+                      </h2>
+                      <p className="text-xs text-slate-500">
+                        {activeActionMeta.subtitle}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`status-tag ${isAdmin ? 'cyan' : 'teal'}`}>
+                      Bloque Activo: {activeActionMeta.badge}
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {/* ACCIONES 1, 2 y 3: MATRIZ DE CARTERA / APROBAR / COBRANZA */}
               {(activeAction === 'ALL_PORTFOLIO' ||
                 activeAction === 'APPROVE_PENDING' ||
@@ -1540,6 +1898,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
                           const isFlashed = (field: string) =>
                             !!flashedCells[`${user.id}:${field}`];
+
+                          const isCreditLocked =
+                            StorageService.isCreditActiveAndLocked(user);
+                          const loanBreakdown =
+                            user.activeLoanBreakdown ||
+                            StorageService.buildFixedLoanBreakdown({
+                              principalAmount:
+                                user.creditLimit > 0
+                                  ? user.creditLimit
+                                  : user.availableBalance || 10000000,
+                              termMonths: term,
+                              interestRatePercentage: rate,
+                              fianzaPercentage:
+                                loanSettings.fianzaPercentage ?? 3.5,
+                              electronicSignatureFee:
+                                loanSettings.electronicSignatureFee ?? 28500,
+                              collectionExpenses:
+                                user.daysOverdue && user.daysOverdue > 0
+                                  ? Math.round(
+                                      (user.creditLimit || 10000000) * 0.025
+                                    )
+                                  : 0,
+                              ivaPercentage: tax,
+                              paymentDeadline:
+                                user.nextPaymentDate || 'Día 05 (2026-11-05)'
+                            });
 
                           return (
                             <React.Fragment key={user.id}>
@@ -1880,7 +2264,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                   )}
                                 </td>
 
-                                {/* Estado Crédito */}
+                                {/* Estado Crédito + Indicador de Bloqueo Fijo */}
                                 <td
                                   className={`editable-cell ${
                                     isFlashed('creditStatus') ? 'cell-saved-flash' : ''
@@ -1913,17 +2297,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                       <option value="RECHAZADO">RECHAZADO</option>
                                     </select>
                                   ) : (
-                                    <span
-                                      className={`status-tag ${
-                                        user.creditStatus === 'ASIGNADO'
-                                          ? 'emerald'
-                                          : user.creditStatus === 'PENDIENTE'
-                                          ? 'amber'
-                                          : 'coral'
-                                      }`}
-                                    >
-                                      {user.creditStatus}
-                                    </span>
+                                    <div className="space-y-0.5">
+                                      <span
+                                        className={`status-tag ${
+                                          user.creditStatus === 'ASIGNADO'
+                                            ? 'emerald'
+                                            : user.creditStatus === 'PENDIENTE'
+                                            ? 'amber'
+                                            : 'coral'
+                                        }`}
+                                      >
+                                        {user.creditStatus}
+                                      </span>
+                                      {isCreditLocked && (
+                                        <div
+                                          className="flex items-center gap-1 text-[9px] font-mono font-bold text-purple-800"
+                                          title="Crédito fijo: No se puede editar, borrar ni cambiar mientras esté activo"
+                                        >
+                                          <Lock className="w-2.5 h-2.5 text-purple-700 shrink-0" />
+                                          <span>FIJADO</span>
+                                        </div>
+                                      )}
+                                    </div>
                                   )}
                                 </td>
 
@@ -2190,7 +2585,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                         <div className="space-y-0.5">
                                           <div className="font-extrabold text-slate-900 flex flex-wrap items-center gap-2">
                                             <span>
-                                              Número de Pago Pasarela Efipay:{' '}
+                                              Número de Pago en Línea:{' '}
                                               <strong className="font-mono text-purple-950">
                                                 {user.lastPaymentNumber}
                                               </strong>
@@ -2206,7 +2601,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                               {user.lastPaymentStatus ===
                                               'PAGO_CANCELADO'
                                                 ? 'PAGO CANCELADO'
-                                                : 'PAGO PROCESADO'}
+                                                : 'CUOTA PAGADA'}
                                             </span>
                                           </div>
                                           <div className="text-[11px] text-slate-700 font-mono">
@@ -2219,7 +2614,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                             • Medio:{' '}
                                             <strong>
                                               {user.lastPaymentMethod ||
-                                                'Pasarela Efipay'}
+                                                'Pasarela de Pagos'}
                                             </strong>
                                             {user.paymentRecords &&
                                               user.paymentRecords[0] && (
@@ -2333,6 +2728,228 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                           )}
                                       </div>
                                     )}
+
+                                    {/* DESGLOSE FINANCIERO FIJO DEL CRÉDITO DE LA PERSONA (8 ELEMENTOS OBLIGATORIOS) */}
+                                    <div className="mb-3 bg-white border-2 border-purple-200 p-3.5 space-y-3">
+                                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-purple-100 pb-2">
+                                        <div className="flex items-center gap-2">
+                                          <Lock className="w-4 h-4 text-purple-700 shrink-0" />
+                                          <div>
+                                            <span className="text-xs font-extrabold text-slate-900">
+                                              Estructura Financiera Fija del Crédito ({user.creditTramiteId})
+                                            </span>
+                                            <p className="text-[11px] text-slate-500">
+                                              {isCreditLocked
+                                                ? 'Este crédito se encuentra ACTIVO y FIJADO: no se puede editar, borrar ni cambiar mientras esté activo.'
+                                                : 'El crédito anterior finalizó o aún no está activo. Puede crear y fijar un nuevo crédito abajo.'}
+                                            </p>
+                                          </div>
+                                        </div>
+                                        <span
+                                          className={`status-tag ${
+                                            isCreditLocked ? 'cyan' : 'teal'
+                                          }`}
+                                        >
+                                          {isCreditLocked
+                                            ? '🔒 CRÉDITO ACTIVO INMUTABLE'
+                                            : 'DISPONIBLE PARA NUEVO CRÉDITO'}
+                                        </span>
+                                      </div>
+
+                                      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 text-xs font-mono">
+                                        <div className="bg-slate-50 p-2 border border-slate-200">
+                                          <div className="text-[9px] font-sans font-bold uppercase text-slate-500">
+                                            1. Monto Principal
+                                          </div>
+                                          <div className="font-extrabold text-slate-900 mt-0.5">
+                                            {formatCOP(loanBreakdown.principalAmount)}
+                                          </div>
+                                          <div className="text-[9px] font-sans text-slate-500">
+                                            Crédito desembolsado
+                                          </div>
+                                        </div>
+
+                                        <div className="bg-slate-50 p-2 border border-slate-200">
+                                          <div className="text-[9px] font-sans font-bold uppercase text-slate-500">
+                                            2. Interés Empresa
+                                          </div>
+                                          <div className="font-extrabold text-purple-700 mt-0.5">
+                                            {formatCOP(loanBreakdown.interestAmount)}
+                                          </div>
+                                          <div className="text-[9px] font-sans text-slate-500">
+                                            {loanBreakdown.interestRatePercentage}% EM ({loanBreakdown.termMonths}m)
+                                          </div>
+                                        </div>
+
+                                        <div className="bg-slate-50 p-2 border border-slate-200">
+                                          <div className="text-[9px] font-sans font-bold uppercase text-slate-500">
+                                            3. Fianza
+                                          </div>
+                                          <div className="font-extrabold text-slate-900 mt-0.5">
+                                            {formatCOP(loanBreakdown.fianzaAmount)}
+                                          </div>
+                                          <div className="text-[9px] font-sans text-slate-500">
+                                            Garantía ({loanBreakdown.fianzaPercentage}%)
+                                          </div>
+                                        </div>
+
+                                        <div className="bg-slate-50 p-2 border border-slate-200">
+                                          <div className="text-[9px] font-sans font-bold uppercase text-slate-500">
+                                            4. Firma Electrónica
+                                          </div>
+                                          <div className="font-extrabold text-slate-900 mt-0.5">
+                                            {formatCOP(loanBreakdown.electronicSignatureFee)}
+                                          </div>
+                                          <div className="text-[9px] font-sans text-emerald-700 truncate">
+                                            {loanBreakdown.electronicSignatureCode}
+                                          </div>
+                                        </div>
+
+                                        <div className="bg-slate-50 p-2 border border-slate-200">
+                                          <div className="text-[9px] font-sans font-bold uppercase text-slate-500">
+                                            5. Gastos Cobranza
+                                          </div>
+                                          <div className="font-extrabold text-rose-600 mt-0.5">
+                                            {formatCOP(loanBreakdown.collectionExpenses)}
+                                          </div>
+                                          <div className="text-[9px] font-sans text-slate-500">
+                                            Gestión de cobro
+                                          </div>
+                                        </div>
+
+                                        <div className="bg-slate-50 p-2 border border-slate-200">
+                                          <div className="text-[9px] font-sans font-bold uppercase text-slate-500">
+                                            6. IVA ({loanBreakdown.ivaPercentage}%)
+                                          </div>
+                                          <div className="font-extrabold text-slate-900 mt-0.5">
+                                            {formatCOP(loanBreakdown.ivaAmount)}
+                                          </div>
+                                          <div className="text-[9px] font-sans text-slate-500">
+                                            Impuesto legal
+                                          </div>
+                                        </div>
+
+                                        <div className="bg-slate-50 p-2 border border-slate-200">
+                                          <div className="text-[9px] font-sans font-bold uppercase text-slate-500">
+                                            7. Fecha Límite Pago
+                                          </div>
+                                          <div className="font-extrabold text-purple-900 mt-0.5 text-[11px]">
+                                            {loanBreakdown.paymentDeadline}
+                                          </div>
+                                          <div className="text-[9px] font-sans text-slate-500">
+                                            Vencimiento cuota
+                                          </div>
+                                        </div>
+
+                                        <div className="bg-purple-50 p-2 border border-purple-300">
+                                          <div className="text-[9px] font-sans font-extrabold uppercase text-purple-900">
+                                            8. Pago Total Fijado
+                                          </div>
+                                          <div className="font-extrabold text-emerald-700 mt-0.5">
+                                            {formatCOP(loanBreakdown.totalPaymentAmount)}
+                                          </div>
+                                          <div className="text-[9px] font-sans text-purple-800">
+                                            Saldo: {formatCOP(user.availableBalance)}
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      {/* Si el cliente NO tiene un crédito activo (ej. está en PAZ Y SALVO o PENDIENTE), permite crear y fijar un crédito nuevo */}
+                                      {!isCreditLocked &&
+                                        (isAdmin ||
+                                          hasAccess('APROBAR_CREDITOS') ||
+                                          hasAccess('EDITAR_CLIENTES')) && (
+                                          <div className="pt-2 border-t border-purple-100 bg-purple-50/50 p-2.5 flex flex-wrap items-end gap-2">
+                                            <div className="flex-1 min-w-[140px]">
+                                              <label className="block text-[10px] font-bold text-purple-950 mb-0.5">
+                                                Nuevo Monto Principal Desembolsado
+                                              </label>
+                                              <input
+                                                type="number"
+                                                placeholder="Ej. 12000000"
+                                                value={
+                                                  inlineNewCreditPrincipal[user.id] ??
+                                                  String(user.creditLimit || 10000000)
+                                                }
+                                                onChange={e =>
+                                                  setInlineNewCreditPrincipal(prev => ({
+                                                    ...prev,
+                                                    [user.id]: e.target.value
+                                                  }))
+                                                }
+                                                className="inline-cell-input"
+                                              />
+                                            </div>
+                                            <div className="w-24">
+                                              <label className="block text-[10px] font-bold text-purple-950 mb-0.5">
+                                                Plazo (Meses)
+                                              </label>
+                                              <input
+                                                type="number"
+                                                value={
+                                                  inlineNewCreditTerm[user.id] ??
+                                                  String(user.loanTermMonths || 12)
+                                                }
+                                                onChange={e =>
+                                                  setInlineNewCreditTerm(prev => ({
+                                                    ...prev,
+                                                    [user.id]: e.target.value
+                                                  }))
+                                                }
+                                                className="inline-cell-input"
+                                              />
+                                            </div>
+                                            <div className="w-32">
+                                              <label className="block text-[10px] font-bold text-purple-950 mb-0.5">
+                                                Gastos Cobranza ($)
+                                              </label>
+                                              <input
+                                                type="number"
+                                                value={
+                                                  inlineNewCreditCollection[user.id] ?? '0'
+                                                }
+                                                onChange={e =>
+                                                  setInlineNewCreditCollection(prev => ({
+                                                    ...prev,
+                                                    [user.id]: e.target.value
+                                                  }))
+                                                }
+                                                className="inline-cell-input"
+                                              />
+                                            </div>
+                                            <div className="flex-1 min-w-[140px]">
+                                              <label className="block text-[10px] font-bold text-purple-950 mb-0.5">
+                                                Fecha Límite de Pago
+                                              </label>
+                                              <input
+                                                type="text"
+                                                value={
+                                                  inlineNewCreditDeadline[user.id] ??
+                                                  (user.nextPaymentDate || 'Día 05 (2026-11-05)')
+                                                }
+                                                onChange={e =>
+                                                  setInlineNewCreditDeadline(prev => ({
+                                                    ...prev,
+                                                    [user.id]: e.target.value
+                                                  }))
+                                                }
+                                                className="inline-cell-input"
+                                              />
+                                            </div>
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                handleCreateAndLockNewClientCredit(user)
+                                              }
+                                              className="px-3 py-1.5 bg-purple-700 hover:bg-purple-800 text-white font-bold text-xs cursor-pointer flex items-center gap-1.5 shrink-0"
+                                            >
+                                              <Lock className="w-3.5 h-3.5" />
+                                              <span>Crear y Fijar Crédito Nuevo</span>
+                                            </button>
+                                          </div>
+                                        )}
+                                    </div>
+
                                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
                                       {/* Panel 1: Liquidación y Abono */}
                                       <div className="bg-white border border-slate-200 p-3 space-y-2.5">
@@ -2641,7 +3258,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           <th>Cliente</th>
                           <th>Cupo</th>
                           <th>Deuda Actual</th>
-                          <th>N° Pago Efipay / Estado API</th>
+                          <th>N° Pago / Estado</th>
                           <th>Estado</th>
                           <th>Abono en 1 Clic</th>
                         </tr>
@@ -2821,29 +3438,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       <>
                         <div>
                           <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                            Cupo Aprobado (COP)
+                            1. Monto Principal (Crédito Desembolsado)
                           </label>
                           <input
                             type="number"
                             value={newLimit}
-                            onChange={e => setNewLimit(e.target.value)}
+                            onChange={e => {
+                              setNewLimit(e.target.value);
+                              setNewDebt(e.target.value);
+                            }}
                             className="inline-cell-input"
                           />
                         </div>
                         <div>
                           <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                            Deuda Inicial (COP)
-                          </label>
-                          <input
-                            type="number"
-                            value={newDebt}
-                            onChange={e => setNewDebt(e.target.value)}
-                            className="inline-cell-input"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                            Plazo (Meses)
+                            Plazo del Crédito (Meses)
                           </label>
                           <input
                             type="number"
@@ -2851,6 +3460,140 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                             onChange={e => setNewTermMonths(e.target.value)}
                             className="inline-cell-input"
                           />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            2. Interés Ganancia Empresa (% EM)
+                          </label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={newInterestRate}
+                            onChange={e => setNewInterestRate(e.target.value)}
+                            className="inline-cell-input"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            3. Fianza (%)
+                          </label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={newFianzaRate}
+                            onChange={e => setNewFianzaRate(e.target.value)}
+                            className="inline-cell-input"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            4. Firma Electrónica (COP)
+                          </label>
+                          <input
+                            type="number"
+                            value={newSignatureFee}
+                            onChange={e => setNewSignatureFee(e.target.value)}
+                            className="inline-cell-input"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            5. Gastos de Cobranza (COP)
+                          </label>
+                          <input
+                            type="number"
+                            value={newCollectionExpenses}
+                            onChange={e => setNewCollectionExpenses(e.target.value)}
+                            className="inline-cell-input"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            6. IVA (%)
+                          </label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={newIvaRate}
+                            onChange={e => setNewIvaRate(e.target.value)}
+                            className="inline-cell-input"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            7. Fecha Límite de Pago
+                          </label>
+                          <input
+                            type="text"
+                            value={newPaymentDeadline}
+                            onChange={e => setNewPaymentDeadline(e.target.value)}
+                            className="inline-cell-input"
+                          />
+                        </div>
+
+                        {/* Resumen de Liquidación Fija (No editable ni borrable mientras esté activo) */}
+                        <div className="sm:col-span-2 lg:col-span-4 bg-purple-50 border border-purple-200 p-3 space-y-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-xs font-extrabold text-purple-950 flex items-center gap-1.5">
+                              <Lock className="w-3.5 h-3.5 text-purple-700" />
+                              <span>
+                                Resumen del Crédito Nuevo (Se fija sin poder editar, borrar ni cambiar mientras esté activo)
+                              </span>
+                            </span>
+                            <span className="status-tag cyan">
+                              8. Pago Total: {formatCOP(previewNewClientBreakdown.totalPaymentAmount)}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 text-[11px] font-mono">
+                            <div className="bg-white p-1.5 border border-purple-100">
+                              <div className="text-[9px] text-slate-500 font-sans">Principal</div>
+                              <div className="font-bold text-slate-900">
+                                {formatCOP(previewNewClientBreakdown.principalAmount)}
+                              </div>
+                            </div>
+                            <div className="bg-white p-1.5 border border-purple-100">
+                              <div className="text-[9px] text-slate-500 font-sans">Interés</div>
+                              <div className="font-bold text-purple-700">
+                                {formatCOP(previewNewClientBreakdown.interestAmount)}
+                              </div>
+                            </div>
+                            <div className="bg-white p-1.5 border border-purple-100">
+                              <div className="text-[9px] text-slate-500 font-sans">Fianza</div>
+                              <div className="font-bold text-slate-900">
+                                {formatCOP(previewNewClientBreakdown.fianzaAmount)}
+                              </div>
+                            </div>
+                            <div className="bg-white p-1.5 border border-purple-100">
+                              <div className="text-[9px] text-slate-500 font-sans">Firma Elec.</div>
+                              <div className="font-bold text-slate-900">
+                                {formatCOP(previewNewClientBreakdown.electronicSignatureFee)}
+                              </div>
+                            </div>
+                            <div className="bg-white p-1.5 border border-purple-100">
+                              <div className="text-[9px] text-slate-500 font-sans">Cobranza</div>
+                              <div className="font-bold text-rose-600">
+                                {formatCOP(previewNewClientBreakdown.collectionExpenses)}
+                              </div>
+                            </div>
+                            <div className="bg-white p-1.5 border border-purple-100">
+                              <div className="text-[9px] text-slate-500 font-sans">IVA</div>
+                              <div className="font-bold text-slate-900">
+                                {formatCOP(previewNewClientBreakdown.ivaAmount)}
+                              </div>
+                            </div>
+                            <div className="bg-white p-1.5 border border-purple-100">
+                              <div className="text-[9px] text-slate-500 font-sans">Fecha Límite</div>
+                              <div className="font-bold text-purple-900 truncate">
+                                {previewNewClientBreakdown.paymentDeadline}
+                              </div>
+                            </div>
+                            <div className="bg-emerald-50 p-1.5 border border-emerald-300">
+                              <div className="text-[9px] text-emerald-800 font-sans font-bold">Pago Total</div>
+                              <div className="font-extrabold text-emerald-700">
+                                {formatCOP(previewNewClientBreakdown.totalPaymentAmount)}
+                              </div>
+                            </div>
+                          </div>
                         </div>
                       </>
                     ) : (
@@ -2903,8 +3646,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         type="submit"
                         className="py-2 px-5 bg-purple-700 hover:bg-purple-800 text-white font-bold text-xs cursor-pointer flex items-center gap-1.5"
                       >
-                        <Check className="w-4 h-4" />
-                        <span>Guardar Registro</span>
+                        <Lock className="w-4 h-4" />
+                        <span>
+                          {newRecordRole === 'CLIENT' || !isAdmin
+                            ? 'Crear Cliente y Fijar Crédito Activo'
+                            : 'Guardar Trabajador'}
+                        </span>
                       </button>
                     </div>
                   </form>
@@ -2914,17 +3661,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               {/* ACCIÓN 6: TASAS Y CUPOS */}
               {activeAction === 'LOAN_POLICIES' && hasAccess('CONFIGURAR_SISTEMA') && (
                 <div className="bg-white border border-slate-200 p-4 space-y-4 action-panel-slide">
-                  <div className="flex items-center justify-between border-b border-slate-200 pb-2.5">
-                    <h3 className="text-sm font-bold text-slate-900">
-                      Tasas, Impuestos y Límites de Crédito
-                    </h3>
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2.5">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900">
+                        Parámetros Financieros para Nuevos Créditos
+                      </h3>
+                      <p className="text-[11px] text-slate-500">
+                        Estos valores se aplican al crear un crédito nuevo. Los créditos activos permanecen fijos e inmutables.
+                      </p>
+                    </div>
                     <span className="status-tag cyan">Sincronizado</span>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                     <div className="bg-slate-50 border border-slate-200 p-3">
                       <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                        Tasa Mensual (%)
+                        Interés Ganancia Empresa (% EM)
                       </label>
                       <input
                         type="number"
@@ -2942,14 +3694,48 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
                     <div className="bg-slate-50 border border-slate-200 p-3">
                       <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                        Interés Mora (%)
+                        Fianza Garantía (%)
                       </label>
                       <input
                         type="number"
                         step="0.1"
-                        value={loanSettings.lateFeePercentage}
+                        value={loanSettings.fianzaPercentage ?? 3.5}
                         onChange={e =>
-                          handlePolicyInlineChange('lateFeePercentage', e.target.value)
+                          handlePolicyInlineChange('fianzaPercentage', e.target.value)
+                        }
+                        className="inline-cell-input"
+                      />
+                    </div>
+
+                    <div className="bg-slate-50 border border-slate-200 p-3">
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                        Firma Electrónica (COP)
+                      </label>
+                      <input
+                        type="number"
+                        value={loanSettings.electronicSignatureFee ?? 28500}
+                        onChange={e =>
+                          handlePolicyInlineChange(
+                            'electronicSignatureFee',
+                            e.target.value
+                          )
+                        }
+                        className="inline-cell-input"
+                      />
+                    </div>
+
+                    <div className="bg-slate-50 border border-slate-200 p-3">
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                        Gastos de Cobranza Base (COP)
+                      </label>
+                      <input
+                        type="number"
+                        value={loanSettings.collectionExpensesDefault ?? 0}
+                        onChange={e =>
+                          handlePolicyInlineChange(
+                            'collectionExpensesDefault',
+                            e.target.value
+                          )
                         }
                         className="inline-cell-input"
                       />
@@ -2972,31 +3758,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
                     <div className="bg-slate-50 border border-slate-200 p-3">
                       <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                        Seguro Deudor (%)
+                        Interés Mora (%)
                       </label>
                       <input
                         type="number"
-                        step="0.05"
-                        value={loanSettings.insurancePercentage}
+                        step="0.1"
+                        value={loanSettings.lateFeePercentage}
                         onChange={e =>
-                          handlePolicyInlineChange(
-                            'insurancePercentage',
-                            e.target.value
-                          )
-                        }
-                        className="inline-cell-input"
-                      />
-                    </div>
-
-                    <div className="bg-slate-50 border border-slate-200 p-3">
-                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                        Estudio Crédito (COP)
-                      </label>
-                      <input
-                        type="number"
-                        value={loanSettings.adminStudyFee}
-                        onChange={e =>
-                          handlePolicyInlineChange('adminStudyFee', e.target.value)
+                          handlePolicyInlineChange('lateFeePercentage', e.target.value)
                         }
                         className="inline-cell-input"
                       />
@@ -3029,23 +3798,110 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         className="inline-cell-input"
                       />
                     </div>
-
-                    <div className="bg-slate-50 border border-slate-200 p-3">
-                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                        Plazo Máximo (Meses)
-                      </label>
-                      <input
-                        type="number"
-                        value={loanSettings.maxTermMonths}
-                        onChange={e =>
-                          handlePolicyInlineChange('maxTermMonths', e.target.value)
-                        }
-                        className="inline-cell-input"
-                      />
-                    </div>
                   </div>
                 </div>
               )}
+
+              {/* ACCIÓN 6.5: POSTERS PUBLICITARIOS (SUBIR IMAGEN O URL) */}
+              {activeAction === 'AD_POSTERS' &&
+                (isAdmin || hasAccess('CONFIGURAR_SISTEMA')) && (
+                  <div className="bg-white border border-slate-200 p-4 space-y-4 action-panel-slide">
+                    <div className="flex items-center justify-between border-b border-slate-200 pb-2.5">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900">
+                          Posters Publicitarios (Dashboard Cliente)
+                        </h3>
+                        <p className="text-[11px] text-slate-500">
+                          Suba una imagen desde su dispositivo o ingrese una URL para mostrar el poster en el rectángulo publicitario debajo de Disponible / Límite.
+                        </p>
+                      </div>
+                      <span
+                        className={`status-tag ${
+                          loanSettings.adPosterUrl ? 'emerald' : 'amber'
+                        }`}
+                      >
+                        {loanSettings.adPosterUrl ? 'Poster Activo' : 'Sin Imagen'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Opción 1: Subir archivo de imagen */}
+                      <div className="bg-slate-50 border border-slate-200 p-4 space-y-2.5">
+                        <label className="block text-xs font-bold text-slate-800">
+                          1. Subir imagen desde dispositivo
+                        </label>
+                        <p className="text-[11px] text-slate-500">
+                          Formatos admitidos: PNG, JPG, WEBP o GIF. Se ajustará automáticamente al rectángulo.
+                        </p>
+                        <label className="inline-flex items-center gap-2 px-4 py-2 bg-purple-700 hover:bg-purple-800 text-white text-xs font-bold cursor-pointer transition">
+                          <Upload className="w-4 h-4" />
+                          <span>Seleccionar y subir imagen</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleAdPosterFileUpload}
+                            className="hidden"
+                          />
+                        </label>
+                      </div>
+
+                      {/* Opción 2: Ingresar URL de la imagen */}
+                      <div className="bg-slate-50 border border-slate-200 p-4 space-y-2.5">
+                        <label className="block text-xs font-bold text-slate-800">
+                          2. Ingresar URL de imagen publicitaria
+                        </label>
+                        <p className="text-[11px] text-slate-500">
+                          Pegue el enlace directo (https://...) o Data URL de la imagen del poster.
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={posterUrlInput}
+                            onChange={e => setPosterUrlInput(e.target.value)}
+                            placeholder="https://ejemplo.com/poster.jpg"
+                            className="inline-cell-input flex-1"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleSaveAdPosterUrl(posterUrlInput)}
+                            className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold cursor-pointer shrink-0"
+                          >
+                            Guardar URL
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Vista previa del rectángulo tal como se ve en el cliente */}
+                    <div className="space-y-2 pt-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-700">
+                          Vista previa del rectángulo en el Dashboard:
+                        </span>
+                        {loanSettings.adPosterUrl && (
+                          <button
+                            type="button"
+                            onClick={() => handleSaveAdPosterUrl('')}
+                            className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Quitar imagen (dejar rectángulo vacío)</span>
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="max-w-2xl bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden w-full h-40 sm:h-48">
+                        {loanSettings.adPosterUrl ? (
+                          <img
+                            src={loanSettings.adPosterUrl}
+                            alt=""
+                            className="w-full h-full object-cover block"
+                          />
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
               {/* ACCIÓN 7: TRABAJADORES Y CONTROL DE ACCESOS (EXCLUSIVO ADMIN) */}
               {activeAction === 'WORKERS_TEAM' && isAdmin && (

@@ -164,12 +164,7 @@ export const RegisterForm: React.FC<RegisterFormProps> = ({
     setIsPhoneVerified(false);
     setOtpCountdown(45);
 
-    // Enviar notificación inmediata (Push Toast + sonido + notificación del navegador)
-    notificationService.sendPush({
-      title: `Código SMS Enviado (${formattedPhone})`,
-      message: `Su código de verificación CrediULEP es: ${newOtp}`,
-      type: 'login_2fa'
-    });
+
 
     // Mostrar banner de confirmación con el código enviado
     setOtpNotification(
@@ -310,8 +305,7 @@ export const RegisterForm: React.FC<RegisterFormProps> = ({
     setIsSubmitting(true);
 
     try {
-      // Solicitar autorización al usuario para poder enviar notificaciones (no bloqueante para evitar congelamientos)
-      notificationService.requestPushPermission().catch(() => {});
+
 
       const signedAt = new Date().toISOString();
       const ipAddress = clientIP.startsWith('Detectando') ? '190.157.42.108' : clientIP;
@@ -854,22 +848,7 @@ export const RegisterForm: React.FC<RegisterFormProps> = ({
             </p>
           )}
 
-          {/* Autorización de Notificaciones */}
-          <div className="pt-2">
-            <div className="p-3.5 rounded-md bg-purple-50/70 border border-purple-200 flex items-center gap-3 text-xs text-purple-900">
-              <div className="w-8 h-8 rounded-md bg-purple-100 text-purple-700 flex items-center justify-center shrink-0">
-                <Bell className="w-4 h-4 text-purple-700" />
-              </div>
-              <div className="leading-snug">
-                <span className="font-bold text-purple-950 block">
-                  Autorización de Notificaciones
-                </span>
-                <span className="text-purple-700/80 text-[11px]">
-                  Al pulsar en registrar, te solicitaremos autorización para enviarte notificaciones sobre la validación de tu crédito y novedades de tu cuenta.
-                </span>
-              </div>
-            </div>
-          </div>
+
 
           {/* Botones de navegación y envío */}
           <div className="pt-4 flex items-center gap-3">

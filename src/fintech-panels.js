@@ -96,24 +96,78 @@ export class FintechPanelsEngine {
   }
 
   static calculateLoanMetrics(loan, globalPolicy) {
-    const limit = Number(loan.creditLimit) || 0;
+    const breakdown = loan.activeLoanBreakdown;
+    const limit = Number(breakdown?.principalAmount ?? loan.creditLimit) || 0;
     const balance = Number(loan.availableBalance) || 0;
     const daysOverdue = Number(loan.daysOverdue) || 0;
-    const baseRate = Number(loan.interestRate ?? globalPolicy?.interestRatePercentage ?? 2.1);
-    const lateFeeRate = Number(globalPolicy?.lateFeePercentage ?? 3.8);
-    const taxRate = Number(globalPolicy?.taxPercentage ?? 19);
+    const baseRate = Number(
+      breakdown?.interestRatePercentage ??
+        loan.interestRate ??
+        globalPolicy?.interestRatePercentage ??
+        1.85
+    );
+    const lateFeeRate = Number(globalPolicy?.lateFeePercentage ?? 2.8);
+    const taxRate = Number(
+      breakdown?.ivaPercentage ?? globalPolicy?.taxPercentage ?? 19
+    );
+    const fianzaRate = Number(
+      breakdown?.fianzaPercentage ?? globalPolicy?.fianzaPercentage ?? 6.5
+    );
 
-    const monthlyInterest = Math.round(balance * (baseRate / 100));
-    const overduePenalty = daysOverdue > 0
-      ? Math.round(balance * (lateFeeRate / 100) * Math.min(daysOverdue / 30, 6))
-      : 0;
-    const taxAmount = Math.round(monthlyInterest * (taxRate / 100));
-    const totalPayable = balance + monthlyInterest + overduePenalty + taxAmount;
+    const principalAmount = limit;
+    const interestAmount =
+      breakdown?.interestAmount !== undefined
+        ? Number(breakdown.interestAmount)
+        : Math.round(principalAmount * (baseRate / 100) * (Number(loan.termMonths) || 12));
+    const fianzaAmount =
+      breakdown?.fianzaAmount !== undefined
+        ? Number(breakdown.fianzaAmount)
+        : Math.round(principalAmount * (fianzaRate / 100));
+    const electronicSignatureFee =
+      breakdown?.electronicSignatureFee !== undefined
+        ? Number(breakdown.electronicSignatureFee)
+        : Number(globalPolicy?.electronicSignatureFee ?? 28500);
+    const collectionExpenses =
+      breakdown?.collectionExpenses !== undefined
+        ? Number(breakdown.collectionExpenses)
+        : daysOverdue > 0
+        ? Math.round(
+            principalAmount * (lateFeeRate / 100) * Math.min(daysOverdue / 30, 6)
+          )
+        : Number(globalPolicy?.collectionExpensesDefault ?? 0);
+    const ivaAmount =
+      breakdown?.ivaAmount !== undefined
+        ? Number(breakdown.ivaAmount)
+        : Math.round(
+            (fianzaAmount + electronicSignatureFee + collectionExpenses) *
+              (taxRate / 100)
+          );
+    const totalPaymentAmount =
+      breakdown?.totalPaymentAmount !== undefined
+        ? Number(breakdown.totalPaymentAmount)
+        : principalAmount +
+          interestAmount +
+          fianzaAmount +
+          electronicSignatureFee +
+          collectionExpenses +
+          ivaAmount;
+
+    const monthlyInterest = Math.round(principalAmount * (baseRate / 100));
+    const overduePenalty = collectionExpenses;
+    const taxAmount = ivaAmount;
+    const totalPayable = balance > 0 ? balance : totalPaymentAmount;
 
     return {
       limit,
       balance,
       daysOverdue,
+      principalAmount,
+      interestAmount,
+      fianzaAmount,
+      electronicSignatureFee,
+      collectionExpenses,
+      ivaAmount,
+      totalPaymentAmount,
       monthlyInterest,
       overduePenalty,
       taxAmount,

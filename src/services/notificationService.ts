@@ -107,30 +107,7 @@ class NotificationService {
       read: false
     };
 
-    // 1. Notificación Push del Sistema Operativo / Navegador
-    if ('Notification' in window && Notification.permission === 'granted') {
-      try {
-        new Notification(item.title, {
-          body: item.message,
-          icon: '/favicon.ico',
-          badge: '/favicon.ico',
-          tag: 'crediulep-tramite',
-          requireInteraction: false
-        });
-      } catch (e) {
-        console.warn('No se pudo invocar Notification del sistema:', e);
-      }
-    }
-
-    // 2. Tono de notificación
-    this.playNotificationSound(item.type === 'credit_assigned' ? 'success' : 'alert');
-
-    // 3. Notificación In-App para los listeners activos
-    this.notifyListeners(item);
-
-    // 4. Guardar en histórico de notificaciones en almacenamiento local
-    this.persistNotification(item);
-
+    // Notificaciones desactivadas a petición del usuario
     return item;
   }
 

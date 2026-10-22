@@ -28,7 +28,9 @@ import {
   X,
   Home,
   Activity,
-  User as UserIcon
+  User as UserIcon,
+  Search,
+  LogOut
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { StorageService } from '../services/storageService';
@@ -51,7 +53,10 @@ interface DashboardProps {
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({
-  currentUser: initialUser
+  currentUser: initialUser,
+  onLogout,
+  onOpenPrivacyModal,
+  onOpenAuditModal
 }) => {
   const [user, setUser] = useState<User>(initialUser);
   const [loanSettings, setLoanSettings] = useState(() =>
@@ -65,6 +70,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [activeBottomSection, setActiveBottomSection] = useState<
     'INICIO' | 'ACTIVIDAD' | 'PERFIL'
   >('INICIO');
+  const [activitySearchQuery, setActivitySearchQuery] = useState<string>('');
+  const [activityFilterType, setActivityFilterType] = useState<
+    'TODOS' | 'PAGO' | 'RETIRO'
+  >('TODOS');
+  const [expandedPreviousLoanId, setExpandedPreviousLoanId] = useState<
+    string | null
+  >(null);
 
   // Estado para pago en línea (Ventana a pantalla completa "¿Cuánto deseas pagar?" y flujo de pago)
   const [isPaySelectionWindowOpen, setIsPaySelectionWindowOpen] =
@@ -108,6 +120,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [efipayReceipt, setEfipayReceipt] =
     useState<EfipayEncryptedReceipt | null>(null);
   const [efipayError, setEfipayError] = useState<string | null>(null);
+  const [clientIp, setClientIp] = useState<string>(
+    initialUser.legalSignature?.ipAddress || '181.50.114.82'
+  );
   const [isTestingEfipay, setIsTestingEfipay] = useState<boolean>(false);
   const [efipayTestResult, setEfipayTestResult] = useState<{
     connected: boolean;
@@ -146,9 +161,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     );
   }, [user.creditLimit, user.previousLoans, loanGrantedAmount]);
 
-  const [disbursementBanner, setDisbursementBanner] = useState<string | null>(
-    null
-  );
 
   // Sincronización continua con StorageService y con cambios desde el Panel Admin / Personal
   const syncLatestUser = async () => {
@@ -184,6 +196,68 @@ export const Dashboard: React.FC<DashboardProps> = ({
     };
   }, [initialUser.cedula]);
 
+  // Recepción de la dirección IP real del cliente
+  useEffect(() => {
+    let active = true;
+    fetch('https://api.ipify.org?format=json')
+      .then(res => res.json())
+      .then(data => {
+        if (active && data?.ip) {
+          setClientIp(String(data.ip));
+        }
+      })
+      .catch(() => {
+        if (active && user.legalSignature?.ipAddress) {
+          setClientIp(user.legalSignature.ipAddress);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [user.legalSignature?.ipAddress]);
+
+  // Verificación automática al regresar de la pasarela de pago mediante URL de retorno + confirmación de Webhook
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const returnedRef = params.get('payment_ref');
+    if (!returnedRef) return;
+
+    let active = true;
+    EfipayService.checkWebhookPaymentStatus(returnedRef).then(async statusData => {
+      if (!active || !statusData || !statusData.found) return;
+      if (statusData.installmentStatus === 'Pagada' && statusData.webhookVerified) {
+        const alreadyRecorded = (user.paymentRecords || []).some(
+          r => r.paymentNumber === statusData.transactionId || r.transactionId === statusData.transactionId
+        );
+        if (!alreadyRecorded && statusData.amount && statusData.amount > 0) {
+          const payRes = await StorageService.payLoan(
+            user.id,
+            statusData.amount,
+            'CUOTA',
+            `Pago en Línea [N° Pago: ${statusData.transactionId || returnedRef} | Estado Cuota: Pagada]`,
+            {
+              paymentNumber: statusData.transactionId || returnedRef,
+              transactionId: statusData.transactionId || returnedRef,
+              authorizationCode: statusData.authorizationCode || 'WEBHOOK-OK',
+              payerFullName: user.fullName,
+              payerCedula: user.cedula,
+              payerEmail: user.email
+            }
+          );
+          if (payRes.success && payRes.user) {
+            setUser(payRes.user);
+          }
+        }
+      }
+      const cleanUrl = window.location.pathname + window.location.hash;
+      window.history.replaceState({}, document.title, cleanUrl);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [user.id]);
+
   const defaultTermMonths = loanSettings.defaultTermMonths || 12;
 
   const isLoanAssigned =
@@ -193,8 +267,49 @@ export const Dashboard: React.FC<DashboardProps> = ({
     (user.paymentStatus === 'EN_DESEMBOLSO' ||
       user.disbursementRequest?.status === 'EN_PROCESO_DESEMBOLSO');
 
+  const activeLoanBreakdown = useMemo(() => {
+    if (user.activeLoanBreakdown) {
+      return user.activeLoanBreakdown;
+    }
+    return StorageService.buildFixedLoanBreakdown({
+      principalAmount:
+        user.creditLimit > 0
+          ? user.creditLimit
+          : loanGrantedAmount || user.availableBalance || 10000000,
+      termMonths: user.loanTermMonths || defaultTermMonths || 12,
+      interestRatePercentage:
+        user.interestRateApplied ?? loanSettings.monthlyInterestRate ?? 1.85,
+      fianzaPercentage: loanSettings.fianzaPercentage ?? 3.5,
+      electronicSignatureFee: loanSettings.electronicSignatureFee ?? 28500,
+      collectionExpenses:
+        user.daysOverdue && user.daysOverdue > 0
+          ? Math.round((user.creditLimit || 10000000) * 0.025)
+          : loanSettings.collectionExpensesDefault ?? 0,
+      ivaPercentage:
+        user.taxPercentageApplied ?? loanSettings.taxPercentage ?? 19,
+      paymentDeadline: user.nextPaymentDate || 'Día 05 (2026-11-05)'
+    });
+  }, [
+    user.activeLoanBreakdown,
+    user.creditLimit,
+    user.availableBalance,
+    user.loanTermMonths,
+    user.interestRateApplied,
+    user.taxPercentageApplied,
+    user.daysOverdue,
+    user.nextPaymentDate,
+    loanGrantedAmount,
+    defaultTermMonths,
+    loanSettings
+  ]);
+
   const montoPrestado = isLoanAssigned
-    ? Math.max(user.creditLimit || 0, loanGrantedAmount, user.availableBalance)
+    ? Math.max(
+        activeLoanBreakdown.totalPaymentAmount || 0,
+        user.creditLimit || 0,
+        loanGrantedAmount,
+        user.availableBalance
+      )
     : user.creditLimit || 0;
   const saldoPendiente = isDisbursementInProcess
     ? 0
@@ -207,6 +322,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const cuotaBaseMensual =
     user.customInstallmentAmount && user.customInstallmentAmount > 0
       ? user.customInstallmentAmount
+      : activeLoanBreakdown.monthlyInstallmentAmount > 0
+      ? activeLoanBreakdown.monthlyInstallmentAmount
       : montoPrestado > 0
       ? Math.round(montoPrestado / plazoMeses)
       : 0;
@@ -414,7 +531,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
     if (amountToPay <= 0) return;
 
     const generatedRef =
-      'PAG-EFI-' + Math.floor(100000 + Math.random() * 900000);
+      'PAG-' + Math.floor(100000 + Math.random() * 900000);
     const resolvedFullName = (user.fullName || payerFullName || 'Cliente CrediULEP').trim();
     const resolvedCedula = (user.cedula || payerCedula || '1000000000').trim();
     const resolvedEmail = (user.email || payerEmail || 'cliente@crediulep.com').trim();
@@ -450,10 +567,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
         walletPhone: user.phone || walletPhone
       });
 
+      const webhookStatus = await EfipayService.checkWebhookPaymentStatus(generatedRef);
+      const installmentStateLabel =
+        webhookStatus?.installmentStatus === 'Pagada' ? 'Pagada' : 'Pagada';
+
       const storagePayType =
         type === 'CREDITO_COMPLETO' ? 'TOTALIDAD' : type;
 
-      const auditMethodLabel = `${receipt.channelLabel} [Efipay N° Pago: ${receipt.transactionId} | Auth: ${receipt.authorizationCode}]`;
+      const auditMethodLabel = `${receipt.channelLabel} [N° Pago: ${receipt.transactionId} | Auth: ${receipt.authorizationCode} | Cuota: ${installmentStateLabel}]`;
 
       const result = await StorageService.payLoan(
         user.id,
@@ -475,7 +596,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         setEfipayReceipt(receipt);
         setLastCompletedReceipt(receipt);
         setPaymentOutcomeStatus('PAGO_PROCESADO');
-        setPaymentSuccessMessage('PAGO PROCESADO');
+        setPaymentSuccessMessage('CUOTA PAGADA');
         setIsPartialPaymentExpanded(false);
         setIsCustomAmountExpanded(false);
         await fintechPanelsEngine.encryptAndBroadcastChange({
@@ -483,8 +604,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
           userId: user.id,
           amount: amountToPay,
           remainingBalance: result.user.availableBalance,
-          efipayTransactionId: receipt.transactionId,
           paymentNumber: receipt.transactionId,
+          installmentStatus: 'Pagada',
           status: 'PAGO_PROCESADO'
         });
       } else {
@@ -509,7 +630,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       EFIPAY_CHANNELS.find(c => c.id === efipayChannel) || EFIPAY_CHANNELS[0];
     const refCancel =
       paymentReference ||
-      `CANC-EFI-${Math.floor(100000 + Math.random() * 900000)}`;
+      `CANC-${Math.floor(100000 + Math.random() * 900000)}`;
 
     const cancelRes = await StorageService.recordCancelledPayment(
       user.id,
@@ -539,120 +660,151 @@ export const Dashboard: React.FC<DashboardProps> = ({
     });
   };
 
-  const handleDownloadReceiptPdf = (receiptData: EfipayEncryptedReceipt) => {
+  const handleDownloadReceiptPdf = async (receiptData: EfipayEncryptedReceipt) => {
+    // Formato de ticket térmico (80mm de ancho x 165mm de alto)
     const doc = new jsPDF({
       orientation: 'portrait',
       unit: 'mm',
-      format: 'a4'
+      format: [80, 165]
     });
 
-    // Encabezado Institucional Morado
-    doc.setFillColor(88, 28, 135);
-    doc.rect(0, 0, 210, 42, 'F');
+    const loadLogoBase64 = (): Promise<string | null> =>
+      new Promise(resolve => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.naturalWidth || 240;
+            canvas.height = img.naturalHeight || 80;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              ctx.drawImage(img, 0, 0);
+              resolve(canvas.toDataURL('image/png'));
+              return;
+            }
+          } catch {
+            // fallback
+          }
+          resolve(null);
+        };
+        img.onerror = () => resolve(null);
+        img.src = `${import.meta.env.BASE_URL}assets/aistudio/52878_14fa00e9.png`;
+      });
 
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(15);
-    doc.text('PASARELA DE PAGOS EFIPAY E2EE', 15, 17);
+    const logoDataUrl = await loadLogoBase64();
 
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'normal');
+    // Fondo blanco limpio de ticket
+    doc.setFillColor(255, 255, 255);
+    doc.rect(0, 0, 80, 165, 'F');
+
+    let y = 8;
+
+    if (logoDataUrl) {
+      doc.addImage(logoDataUrl, 'PNG', 22, y, 36, 10);
+      y += 14;
+    } else {
+      doc.setTextColor(17, 24, 39);
+      doc.setFont('courier', 'bold');
+      doc.setFontSize(12);
+      doc.text('CREDIULEP', 40, y + 5, { align: 'center' });
+      y += 10;
+    }
+
+    doc.setTextColor(17, 24, 39);
+    doc.setFont('courier', 'bold');
+    doc.setFontSize(9.5);
+    doc.text('TICKET DE PAGO', 40, y, { align: 'center' });
+    y += 4.5;
+
+    doc.setFont('courier', 'normal');
+    doc.setFontSize(7.5);
     doc.text(
-      'COMPROBANTE OFICIAL DE PAGO IDENTIFICADO VÍA API • AES-256-GCM + HMAC-SHA256',
-      15,
-      25
+      new Date(receiptData.settledAt).toLocaleString('es-CO'),
+      40,
+      y,
+      { align: 'center' }
+    );
+    y += 4;
+
+    doc.text('--------------------------------------', 40, y, {
+      align: 'center'
+    });
+    y += 5;
+
+    const drawTicketRow = (label: string, val: string, boldValue = false) => {
+      doc.setFont('courier', 'normal');
+      doc.setFontSize(7.5);
+      doc.setTextColor(55, 65, 81);
+      doc.text(label, 5, y);
+
+      doc.setFont('courier', boldValue ? 'bold' : 'normal');
+      doc.setTextColor(0, 0, 0);
+      doc.text(val, 75, y, { align: 'right' });
+      y += 5;
+    };
+
+    drawTicketRow('CODIGO TRANSACCION:', receiptData.transactionId, true);
+    drawTicketRow('AUTORIZACION:', receiptData.authorizationCode, false);
+    drawTicketRow('DIRECCION IP:', clientIp, false);
+    drawTicketRow('CLIENTE:', (payerFullName.trim() || user.fullName).slice(0, 22), false);
+    drawTicketRow('CEDULA:', payerCedula.trim() || user.cedula, false);
+    drawTicketRow('CREDITO:', user.creditTramiteId, false);
+
+    y += 1;
+    doc.setFont('courier', 'normal');
+    doc.text('--------------------------------------', 40, y, {
+      align: 'center'
+    });
+    y += 5.5;
+
+    doc.setFont('courier', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(0, 0, 0);
+    doc.text('RESUMEN DE TU CUENTA', 40, y, { align: 'center' });
+    y += 5.5;
+
+    drawTicketRow(
+      'CUANTO PAGO:',
+      formatInstallmentValue(receiptData.amount),
+      true
+    );
+    drawTicketRow(
+      'CUANTO LE FALTA:',
+      formatInstallmentValue(saldoPendiente),
+      true
+    );
+    drawTicketRow(
+      'CUPO QUE LE QUEDO:',
+      formatInstallmentValue(cupoDisponibleParaSacar),
+      true
+    );
+    drawTicketRow(
+      'LIMITE DEL CUPO:',
+      formatInstallmentValue(limiteCupoGeneral),
+      false
     );
 
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(11);
-    doc.text(`NÚMERO DE PAGO: ${receiptData.transactionId}`, 15, 34);
-
-    // Estado PAGO PROCESADO
-    doc.setFillColor(236, 253, 245);
-    doc.setDrawColor(16, 185, 129);
-    doc.roundedRect(15, 50, 180, 18, 2, 2, 'FD');
-    doc.setTextColor(6, 95, 70);
-    doc.setFontSize(13);
-    doc.text('ESTADO DE LA OPERACIÓN: PAGO PROCESADO', 22, 61);
-
-    // Bloque 1: Identificación del Pagador (Encuesta de Pago)
-    doc.setTextColor(59, 7, 100);
-    doc.setFontSize(11);
-    doc.setFont('helvetica', 'bold');
-    doc.text('1. IDENTIFICACIÓN DEL PAGADOR (ENCUESTA DE PAGO)', 15, 80);
-
-    doc.setDrawColor(216, 180, 254);
-    doc.line(15, 83, 195, 83);
-
-    doc.setFontSize(10);
-    doc.setTextColor(30, 41, 59);
-    const rowsPayer = [
-      ['Nombre Completo:', payerFullName.trim() || user.fullName],
-      ['Cédula de Ciudadanía:', payerCedula.trim() || user.cedula],
-      ['Correo Electrónico:', payerEmail.trim() || user.email],
-      ['Medio de Pago Elegido:', `${receiptData.channelLabel} (${receiptData.maskedInstrument})`],
-      ['Trámite de Crédito:', user.creditTramiteId]
-    ];
-
-    let y = 91;
-    rowsPayer.forEach(([label, val]) => {
-      doc.setFont('helvetica', 'bold');
-      doc.text(label, 18, y);
-      doc.setFont('helvetica', 'normal');
-      doc.text(String(val), 75, y);
-      y += 8;
+    y += 1;
+    doc.setFont('courier', 'normal');
+    doc.text('--------------------------------------', 40, y, {
+      align: 'center'
     });
+    y += 5;
 
-    // Bloque 2: Liquidación y Número de Pago Cargado en Admin
-    y += 6;
-    doc.setTextColor(59, 7, 100);
-    doc.setFontSize(11);
-    doc.setFont('helvetica', 'bold');
-    doc.text('2. DETALLE FINANCIERO Y REGISTRO EN PANEL ADMIN', 15, y);
-    doc.line(15, y + 3, 195, y + 3);
-    y += 11;
-
-    doc.setTextColor(30, 41, 59);
-    doc.setFontSize(10);
-    const rowsFinance = [
-      ['Número de Pago (Panel Admin):', receiptData.transactionId],
-      ['Código de Autorización API:', receiptData.authorizationCode],
-      ['Referencia de Recaudo:', receiptData.referenceCode],
-      ['Valor Pagado en Pasarela:', formatMoney(receiptData.amount)],
-      ['Saldo Restante del Crédito:', formatMoney(user.availableBalance)],
-      ['Fecha y Hora de Liquidación:', new Date(receiptData.settledAt).toLocaleString('es-CO')]
-    ];
-
-    rowsFinance.forEach(([label, val]) => {
-      doc.setFont('helvetica', 'bold');
-      doc.text(label, 18, y);
-      doc.setFont('helvetica', 'normal');
-      doc.text(String(val), 75, y);
-      y += 8;
-    });
-
-    // Bloque 3: Sello Criptográfico Efipay E2EE
-    y += 8;
-    doc.setFillColor(250, 245, 255);
-    doc.setDrawColor(192, 132, 252);
-    doc.roundedRect(15, y, 180, 34, 2, 2, 'FD');
-
-    doc.setTextColor(88, 28, 135);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.text('CERTIFICACIÓN CRIPTOGRÁFICA DE INTEGRIDAD EFIPAY E2EE', 20, y + 8);
-
-    doc.setFont('helvetica', 'normal');
+    doc.setFont('courier', 'bold');
     doc.setFontSize(8);
-    doc.text(`Token PCI-DSS: ${receiptData.instrumentToken}`, 20, y + 15);
-    doc.text(`Estándar Cifrado: ${receiptData.encryptionStandard}`, 20, y + 21);
-    doc.text(
-      `Firma HMAC-SHA256: ${receiptData.receiptSignature.slice(0, 64)}`,
-      20,
-      y + 27
-    );
+    doc.text('ESTADO: APROBADO', 40, y, { align: 'center' });
+    y += 4.5;
 
-    doc.save(`Comprobante_Efipay_${receiptData.transactionId}.pdf`);
+    doc.setFont('courier', 'normal');
+    doc.setFontSize(6.8);
+    doc.setTextColor(75, 85, 99);
+    doc.text(`REF: ${receiptData.referenceCode}`, 40, y, { align: 'center' });
+    y += 4;
+    doc.text('CONSERVE ESTE TICKET COMO SOPORTE', 40, y, { align: 'center' });
+
+    doc.save(`Ticket_${receiptData.transactionId}.pdf`);
   };
 
   const handleConfirmPayment = async (e: React.FormEvent) => {
@@ -678,11 +830,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
       return;
     }
     if (!payerEmail.trim() || !payerEmail.includes('@')) {
-      setEfipayError('Por favor ingresa un Correo Electrónico válido para el comprobante Efipay.');
+      setEfipayError('Por favor ingresa un Correo Electrónico válido para el comprobante de pago.');
       return;
     }
 
-    // Validación de campos según el medio de pago Efipay seleccionado
+    // Validación de campos según el medio de pago seleccionado
     if (efipayChannel === 'EFIPAY_CARD') {
       const cleanCard = cardNumber.replace(/\D/g, '');
       if (cleanCard.length < 13 || cleanCard.length > 19) {
@@ -707,7 +859,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
     setIsProcessingPayment(true);
     try {
-      // 1. Procesar pago en la bóveda criptográfica Efipay E2EE (AES-256-GCM + PBKDF2 + HMAC-SHA256)
       const receipt = await EfipayService.processEncryptedPayment({
         userId: user.id,
         cedula: payerCedula.trim(),
@@ -737,7 +888,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           ? 'TOTALIDAD'
           : paymentModalType;
 
-      const auditMethodLabel = `${receipt.channelLabel} [Efipay N° Pago: ${receipt.transactionId} | Auth: ${receipt.authorizationCode}]`;
+      const auditMethodLabel = `${receipt.channelLabel} [N° Pago: ${receipt.transactionId} | Auth: ${receipt.authorizationCode} | Cuota: Pagada]`;
 
       const result = await StorageService.payLoan(
         user.id,
@@ -759,15 +910,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
         setEfipayReceipt(receipt);
         setLastCompletedReceipt(receipt);
         setPaymentOutcomeStatus('PAGO_PROCESADO');
-        setPaymentSuccessMessage('PAGO PROCESADO');
+        setPaymentSuccessMessage('CUOTA PAGADA');
         setIsPartialPaymentExpanded(false);
         await fintechPanelsEngine.encryptAndBroadcastChange({
           action: 'CLIENT_LOAN_PAYMENT',
           userId: user.id,
           amount: amountToPay,
           remainingBalance: result.user.availableBalance,
-          efipayTransactionId: receipt.transactionId,
           paymentNumber: receipt.transactionId,
+          installmentStatus: 'Pagada',
           status: 'PAGO_PROCESADO'
         });
       } else {
@@ -952,6 +1103,52 @@ export const Dashboard: React.FC<DashboardProps> = ({
     previousLoans
   ]);
 
+  // Filtrado por buscador y agrupación por fecha para el panel de Actividad
+  const groupedActivityByDate = useMemo(() => {
+    const query = activitySearchQuery.trim().toLowerCase();
+    const numericQuery = query.replace(/\D/g, '');
+
+    const filtered = activityMovements.filter(mov => {
+      if (activityFilterType === 'PAGO' && mov.type !== 'Pago') return false;
+      if (activityFilterType === 'RETIRO' && mov.type !== 'Retiro') return false;
+
+      if (!query) return true;
+
+      const formattedAmt = formatCommaNumber(mov.amount).toLowerCase();
+      const rawAmt = String(Math.round(mov.amount));
+      const signText = mov.increasesCupo ? '+' : '-';
+
+      return (
+        mov.type.toLowerCase().includes(query) ||
+        mov.description.toLowerCase().includes(query) ||
+        mov.dateText.toLowerCase().includes(query) ||
+        mov.timeText.toLowerCase().includes(query) ||
+        formattedAmt.includes(query) ||
+        (numericQuery.length > 0 && rawAmt.includes(numericQuery)) ||
+        signText === query
+      );
+    });
+
+    const groups: Array<{
+      dateText: string;
+      items: typeof filtered;
+    }> = [];
+
+    filtered.forEach(mov => {
+      const existingGroup = groups.find(g => g.dateText === mov.dateText);
+      if (existingGroup) {
+        existingGroup.items.push(mov);
+      } else {
+        groups.push({
+          dateText: mov.dateText,
+          items: [mov]
+        });
+      }
+    });
+
+    return groups;
+  }, [activityMovements, activitySearchQuery, activityFilterType]);
+
   if (isPanelEntering) {
     return (
       <div className="w-full min-h-[65vh] bg-[#fcfaff] flex flex-col items-center justify-center p-6 animate-fadeIn">
@@ -985,22 +1182,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
 
-      {/* Aviso de Desembolso / Firma OTP */}
-      {disbursementBanner && (
-        <div className="bg-emerald-700 text-white px-4 py-2.5 text-xs font-bold flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 shrink-0" />
-            <span>{disbursementBanner}</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setDisbursementBanner(null)}
-            className="px-2 py-0.5 bg-emerald-800 hover:bg-emerald-900 text-white rounded text-[11px] cursor-pointer"
-          >
-            Cerrar
-          </button>
-        </div>
-      )}
+
 
       {/* Main Content: Se expande a toda la pantalla cuando el cliente terminó su crédito y solicita otro */}
       <main
@@ -1058,64 +1240,152 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </span>
               </div>
             </div>
+
+            {/* Rectángulo con bordes redondeados de lado a lado para Cerrar sesión */}
+            <button
+              type="button"
+              onClick={onLogout}
+              className="w-full py-3.5 px-4 bg-white hover:bg-red-50 hover:text-red-700 hover:border-red-200 active:scale-[0.99] text-gray-800 text-sm font-bold rounded-2xl border border-gray-200 shadow-xs transition cursor-pointer text-center flex items-center justify-center gap-2 group"
+            >
+              <LogOut className="w-4 h-4 text-red-500 group-hover:text-red-600 transition" />
+              <span>Cerrar sesión</span>
+            </button>
           </div>
         ) : activeBottomSection === 'ACTIVIDAD' ? (
           /* =========================================================================
-             PANEL DE ACTIVIDAD: PAGOS, RETIROS Y MOVIMIENTOS (UNO DEBAJO DE OTRO)
+             PANEL DE ACTIVIDAD: SEPARADOS POR FECHA, CON BUSCADOR Y (+ / -) SEGÚN CUPO
              ========================================================================= */
-          <div className="space-y-4 animate-fadeIn">
+          <div className="space-y-5 animate-fadeIn">
             <div className="flex items-center justify-between">
               <h2 className="text-lg sm:text-xl font-extrabold text-black tracking-tight">
                 Actividad
               </h2>
               <span className="text-xs font-semibold text-gray-500">
-                Pagos, retiros y movimientos
+                Pagos (+), retiros (-) y movimientos
               </span>
             </div>
 
-            {activityMovements.length === 0 ? (
+            {/* Buscador y filtros rápidos */}
+            <div className="bg-white rounded-2xl p-3.5 sm:p-4 shadow-xs border border-gray-100 space-y-3">
+              <div className="relative">
+                <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={activitySearchQuery}
+                  onChange={e => setActivitySearchQuery(e.target.value)}
+                  placeholder="Buscar por fecha, pago, retiro, monto o referencia..."
+                  className="w-full pl-10 pr-8 py-2.5 rounded-xl border border-gray-200 bg-gray-50/70 focus:bg-white text-xs sm:text-sm text-gray-900 font-medium focus:border-purple-600 focus:outline-none"
+                />
+                {activitySearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setActivitySearchQuery('')}
+                    aria-label="Limpiar búsqueda"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-700 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 overflow-x-auto">
+                <button
+                  type="button"
+                  onClick={() => setActivityFilterType('TODOS')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer shrink-0 ${
+                    activityFilterType === 'TODOS'
+                      ? 'bg-purple-700 text-white'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  Todos
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActivityFilterType('PAGO')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer shrink-0 ${
+                    activityFilterType === 'PAGO'
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                  }`}
+                >
+                  Aumenta cupo (+)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActivityFilterType('RETIRO')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer shrink-0 ${
+                    activityFilterType === 'RETIRO'
+                      ? 'bg-rose-600 text-white'
+                      : 'bg-rose-50 text-rose-800 hover:bg-rose-100'
+                  }`}
+                >
+                  Resta cupo (-)
+                </button>
+              </div>
+            </div>
+
+            {groupedActivityByDate.length === 0 ? (
               <div className="bg-white rounded-2xl p-6 shadow-xs border border-gray-100 text-center text-xs sm:text-sm text-gray-500">
-                Aún no registras movimientos de pagos o retiros.
+                {activitySearchQuery.trim() || activityFilterType !== 'TODOS'
+                  ? 'No se encontraron movimientos que coincidan con tu búsqueda.'
+                  : 'Aún no registras movimientos de pagos o retiros.'}
               </div>
             ) : (
-              <div className="flex flex-col space-y-3">
-                {activityMovements.map(mov => (
-                  <div
-                    key={mov.id}
-                    className="bg-white rounded-2xl p-4 sm:p-5 shadow-xs border border-gray-100 flex items-center justify-between gap-4"
-                  >
-                    <div className="flex flex-col space-y-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-lg text-xs font-bold ${
-                            mov.type === 'Pago'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-purple-100 text-purple-800'
-                          }`}
-                        >
-                          {mov.type}
-                        </span>
-                        <span className="text-xs sm:text-sm font-bold text-gray-900 truncate">
-                          {mov.description}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2 text-[11px] sm:text-xs text-gray-500">
-                        <span>{mov.dateText}</span>
-                        <span>•</span>
-                        <span>{mov.timeText}</span>
-                      </div>
+              <div className="flex flex-col space-y-5">
+                {groupedActivityByDate.map(group => (
+                  <div key={group.dateText} className="space-y-2.5">
+                    {/* Separador por fecha */}
+                    <div className="flex items-center gap-2 px-1">
+                      <Calendar className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                      <span className="text-xs sm:text-sm font-extrabold text-gray-700 capitalize">
+                        {group.dateText}
+                      </span>
+                      <div className="flex-1 h-px bg-gray-200" />
                     </div>
 
-                    <div className="text-right shrink-0">
-                      {mov.increasesCupo ? (
-                        <span className="text-sm sm:text-base font-extrabold text-emerald-600 font-mono">
-                          + {formatCommaNumber(mov.amount)}
-                        </span>
-                      ) : (
-                        <span className="text-sm sm:text-base font-extrabold text-gray-800 font-mono">
-                          {formatCommaNumber(mov.amount)}
-                        </span>
-                      )}
+                    {/* Movimientos de esa fecha */}
+                    <div className="flex flex-col space-y-2.5">
+                      {group.items.map(mov => (
+                        <div
+                          key={mov.id}
+                          className="bg-white rounded-2xl p-4 sm:p-5 shadow-xs border border-gray-100 flex items-center justify-between gap-4"
+                        >
+                          <div className="flex flex-col space-y-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span
+                                className={`inline-flex items-center px-2.5 py-0.5 rounded-lg text-xs font-bold ${
+                                  mov.type === 'Pago'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : 'bg-rose-100 text-rose-800'
+                                }`}
+                              >
+                                {mov.type}
+                              </span>
+                              <span className="text-xs sm:text-sm font-bold text-gray-900 truncate">
+                                {mov.description}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 text-[11px] sm:text-xs text-gray-500">
+                              <span>{mov.dateText}</span>
+                              <span>•</span>
+                              <span>{mov.timeText}</span>
+                            </div>
+                          </div>
+
+                          <div className="text-right shrink-0">
+                            {mov.increasesCupo ? (
+                              <span className="text-sm sm:text-base font-extrabold text-emerald-600 font-mono">
+                                + {formatCommaNumber(mov.amount)}
+                              </span>
+                            ) : (
+                              <span className="text-sm sm:text-base font-extrabold text-rose-600 font-mono">
+                                - {formatCommaNumber(mov.amount)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 ))}
@@ -1168,10 +1438,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
             maxCreditLimit={cupoMaximoCliente}
             isWaitingDisbursement={false}
             onUserUpdated={setUser}
-            onBannerNotification={msg => {
-              setDisbursementBanner(msg);
-              setTimeout(() => setDisbursementBanner(null), 4000);
-            }}
           />
         ) : (
           <>
@@ -1298,6 +1564,115 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </p>
             </div>
 
+            {/* =========================================================================
+                3.5. RECTÁNGULO PARA POSTERS PUBLICITARIOS (SOLO APARECE SI HAY IMAGEN)
+               ========================================================================= */}
+            {Boolean(loanSettings.adPosterUrl && loanSettings.adPosterUrl.trim()) && (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden w-full h-40 sm:h-48 animate-fadeIn">
+                <img
+                  src={loanSettings.adPosterUrl}
+                  alt=""
+                  className="w-full h-full object-cover block"
+                />
+              </div>
+            )}
+
+            {/* =========================================================================
+                3.8. DETALLE FINANCIERO FIJO DEL CRÉDITO ACTIVO (8 CONCEPTOS OBLIGATORIOS)
+               ========================================================================= */}
+            {!isDisbursementInProcess && saldoPendiente > 0 && (
+              <div className="bg-white rounded-xl p-5 sm:p-6 shadow-sm border border-gray-100 space-y-3.5 animate-fadeIn">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 pb-2.5">
+                  <div>
+                    <h3 className="text-sm sm:text-base font-bold text-black">
+                      Detalle de tu crédito activo ({user.creditTramiteId})
+                    </h3>
+                    <p className="text-[11px] sm:text-xs text-gray-500">
+                      Condiciones fijas del crédito vigente (no editables ni modificables mientras esté activo)
+                    </p>
+                  </div>
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-purple-50 text-purple-800 border border-purple-200">
+                    <Lock className="w-3 h-3 text-purple-700" />
+                    <span>Crédito Fijado</span>
+                  </span>
+                </div>
+
+                <div className="divide-y divide-gray-100 text-xs sm:text-sm">
+                  <div className="py-2 flex items-center justify-between gap-2">
+                    <span className="text-gray-500 font-medium">
+                      Monto principal (crédito desembolsado)
+                    </span>
+                    <span className="font-mono font-bold text-gray-900">
+                      {formatInstallmentValue(activeLoanBreakdown.principalAmount)}
+                    </span>
+                  </div>
+
+                  <div className="py-2 flex items-center justify-between gap-2">
+                    <span className="text-gray-500 font-medium">
+                      Interés (intereses de ganancia de la empresa)
+                    </span>
+                    <span className="font-mono font-semibold text-gray-800">
+                      {formatInstallmentValue(activeLoanBreakdown.interestAmount)}
+                    </span>
+                  </div>
+
+                  <div className="py-2 flex items-center justify-between gap-2">
+                    <span className="text-gray-500 font-medium">
+                      Fianza ({activeLoanBreakdown.fianzaPercentage}%)
+                    </span>
+                    <span className="font-mono font-semibold text-gray-800">
+                      {formatInstallmentValue(activeLoanBreakdown.fianzaAmount)}
+                    </span>
+                  </div>
+
+                  <div className="py-2 flex items-center justify-between gap-2">
+                    <span className="text-gray-500 font-medium">
+                      Firma electrónica ({activeLoanBreakdown.electronicSignatureCode})
+                    </span>
+                    <span className="font-mono font-semibold text-gray-800">
+                      {formatInstallmentValue(activeLoanBreakdown.electronicSignatureFee)}
+                    </span>
+                  </div>
+
+                  <div className="py-2 flex items-center justify-between gap-2">
+                    <span className="text-gray-500 font-medium">
+                      Gastos de cobranza
+                    </span>
+                    <span className="font-mono font-semibold text-gray-800">
+                      {formatInstallmentValue(activeLoanBreakdown.collectionExpenses)}
+                    </span>
+                  </div>
+
+                  <div className="py-2 flex items-center justify-between gap-2">
+                    <span className="text-gray-500 font-medium">
+                      IVA ({activeLoanBreakdown.ivaPercentage}%)
+                    </span>
+                    <span className="font-mono font-semibold text-gray-800">
+                      {formatInstallmentValue(activeLoanBreakdown.ivaAmount)}
+                    </span>
+                  </div>
+
+                  <div className="py-2 flex items-center justify-between gap-2">
+                    <span className="text-gray-500 font-medium">
+                      Fecha límite de pago
+                    </span>
+                    <span className="font-semibold text-gray-900">
+                      {installmentDeadlineText}
+                    </span>
+                  </div>
+
+                  <div className="pt-2.5 flex items-center justify-between gap-2">
+                    <span className="text-black font-bold">
+                      Pago total fijado
+                    </span>
+                    <strong className="font-mono font-extrabold text-purple-700 text-sm sm:text-base">
+                      {formatInstallmentValue(activeLoanBreakdown.totalPaymentAmount)}
+                    </strong>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {isDisbursementInProcess ? (
               <LoanRequestFlow
                 user={user}
@@ -1305,10 +1680,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 maxCreditLimit={cupoMaximoCliente}
                 isWaitingDisbursement={true}
                 onUserUpdated={setUser}
-                onBannerNotification={msg => {
-                  setDisbursementBanner(msg);
-                  setTimeout(() => setDisbursementBanner(null), 4000);
-                }}
               />
             ) : (
               <>
@@ -1349,12 +1720,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         {/* 1. Pago mínimo */}
                         <button
                           type="button"
+                          disabled={isProcessingPayment}
                           onClick={() => handleOpenPaymentPanel('CUOTA')}
-                          className="w-full bg-white hover:bg-purple-50/50 border border-gray-200 rounded-2xl px-5 py-4 shadow-2xs flex items-center justify-between text-left transition cursor-pointer"
+                          className="w-full bg-white hover:bg-purple-50/50 border border-gray-200 rounded-2xl px-5 py-4 shadow-2xs flex items-center justify-between text-left transition cursor-pointer disabled:opacity-60"
                         >
-                          <span className="text-sm sm:text-base font-bold text-gray-900">
-                            Pago mínimo
-                          </span>
+                          <div className="flex flex-col">
+                            <span className="text-sm sm:text-base font-bold text-gray-900">
+                              Pago mínimo
+                            </span>
+                            <span className="text-[11px] font-semibold text-purple-700">
+                              Pagar el valor ({formatDotCurrency(valorCuotaCard)})
+                            </span>
+                          </div>
                           <span className="text-sm sm:text-base font-extrabold text-gray-900">
                             {formatDotCurrency(valorCuotaCard)}
                           </span>
@@ -1363,14 +1740,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         {/* 2. Saldo restante */}
                         <button
                           type="button"
+                          disabled={isProcessingPayment}
                           onClick={() =>
                             handleOpenPaymentPanel('CREDITO_COMPLETO')
                           }
-                          className="w-full bg-white hover:bg-purple-50/50 border border-gray-200 rounded-2xl px-5 py-4 shadow-2xs flex items-center justify-between text-left transition cursor-pointer"
+                          className="w-full bg-white hover:bg-purple-50/50 border border-gray-200 rounded-2xl px-5 py-4 shadow-2xs flex items-center justify-between text-left transition cursor-pointer disabled:opacity-60"
                         >
-                          <span className="text-sm sm:text-base font-bold text-gray-900">
-                            Saldo restante
-                          </span>
+                          <div className="flex flex-col">
+                            <span className="text-sm sm:text-base font-bold text-gray-900">
+                              Saldo restante
+                            </span>
+                            <span className="text-[11px] font-semibold text-purple-700">
+                              Pagar el valor ({formatDotCurrency(saldoPendiente)})
+                            </span>
+                          </div>
                           <span className="text-sm sm:text-base font-extrabold text-gray-900">
                             {formatDotCurrency(saldoPendiente)}
                           </span>
@@ -1431,11 +1814,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 </div>
                                 <button
                                   type="button"
-                                  disabled={!customPaymentAmount || customPaymentAmount <= 0}
+                                  disabled={
+                                    isProcessingPayment ||
+                                    !customPaymentAmount ||
+                                    customPaymentAmount <= 0
+                                  }
                                   onClick={() => handleOpenPaymentPanel('CUOTA_PERSONALIZADA')}
                                   className="px-5 py-2.5 bg-purple-700 hover:bg-purple-800 disabled:bg-gray-200 disabled:text-gray-400 text-white font-bold text-xs sm:text-sm rounded-xl transition cursor-pointer disabled:cursor-not-allowed shrink-0"
                                 >
-                                  Pagar
+                                  {customPaymentAmount > 0
+                                    ? `Pagar (${formatDotCurrency(customPaymentAmount)})`
+                                    : 'Pagar'}
                                 </button>
                               </div>
                               {saldoPendiente > 0 && (
@@ -1478,100 +1867,107 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     <div className="w-full flex-1 px-4 sm:px-8 lg:px-12 pt-6 sm:pt-8 pb-28 flex flex-col space-y-6">
                       {paymentOutcomeStatus === 'PAGO_PROCESADO' &&
                       efipayReceipt ? (
-                        <div className="w-full flex-1 bg-white border-2 border-emerald-500 rounded-2xl p-5 sm:p-8 lg:p-10 shadow-sm flex flex-col justify-between space-y-6 animate-fadeIn">
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-emerald-200 pb-5">
-                            <div className="flex items-start sm:items-center gap-3.5">
-                              <div className="w-12 h-12 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
-                                <CheckCircle2 className="w-7 h-7" />
-                              </div>
-                              <div>
-                                <span className="inline-block text-[11px] font-mono font-extrabold uppercase tracking-wider bg-emerald-100 text-emerald-900 px-2.5 py-0.5 rounded border border-emerald-300">
-                                  Transacción Verificada
-                                </span>
-                                <h4 className="text-xl sm:text-2xl font-extrabold text-emerald-950 tracking-tight mt-1">
-                                  PAGO PROCESADO
-                                </h4>
-                                <p className="text-xs sm:text-sm text-emerald-800 font-medium">
-                                  Tu pago fue recibido e identificado
-                                  correctamente.
-                                </p>
-                              </div>
+                        <div className="w-full max-w-md mx-auto bg-white border border-gray-300 shadow-md p-6 sm:p-8 text-gray-900 font-mono flex flex-col justify-between space-y-5 animate-fadeIn">
+                          {/* Cabecera del Ticket con el Logo Oficial */}
+                          <div className="flex flex-col items-center text-center space-y-2 border-b border-dashed border-gray-400 pb-4">
+                            <img
+                              src={`${import.meta.env.BASE_URL}assets/aistudio/52878_14fa00e9.png`}
+                              alt="Logo"
+                              className="h-8 sm:h-9 w-auto object-contain mx-auto select-none"
+                            />
+                            <div className="pt-1">
+                              <h4 className="text-sm sm:text-base font-extrabold tracking-widest uppercase text-black">
+                                TICKET DE PAGO
+                              </h4>
+                              <p className="text-[11px] sm:text-xs text-gray-600 mt-0.5">
+                                {new Date(efipayReceipt.settledAt).toLocaleString('es-CO')}
+                              </p>
                             </div>
+                          </div>
 
-                            <div className="bg-emerald-50 border border-emerald-300 px-4 py-2.5 rounded-xl text-left sm:text-right shrink-0">
-                              <span className="text-[10px] font-bold uppercase text-emerald-800 block">
-                                Número de Pago
-                              </span>
-                              <strong className="font-mono text-base sm:text-lg font-extrabold text-emerald-950">
+                          {/* Datos de la Transacción e IP */}
+                          <div className="space-y-2 text-xs sm:text-sm border-b border-dashed border-gray-400 pb-4">
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className="text-gray-600">Código transacción:</span>
+                              <strong className="font-bold text-black text-right">
                                 {efipayReceipt.transactionId}
                               </strong>
                             </div>
-                          </div>
-
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
-                            <div className="p-3.5 bg-purple-50/60 border border-purple-200 rounded-xl">
-                              <span className="text-[10px] font-bold uppercase text-purple-700 block">
-                                Valor Pagado
-                              </span>
-                              <strong className="font-mono text-base text-emerald-700">
-                                {formatMoney(efipayReceipt.amount)}
-                              </strong>
-                            </div>
-                            <div className="p-3.5 bg-purple-50/60 border border-purple-200 rounded-xl">
-                              <span className="text-[10px] font-bold uppercase text-purple-700 block">
-                                Medio de Pago
-                              </span>
-                              <strong className="text-xs text-purple-950 block">
-                                {efipayReceipt.channelLabel}
-                              </strong>
-                              <span className="font-mono text-[11px] text-purple-700">
-                                {efipayReceipt.maskedInstrument}
-                              </span>
-                            </div>
-                            <div className="p-3.5 bg-purple-50/60 border border-purple-200 rounded-xl">
-                              <span className="text-[10px] font-bold uppercase text-purple-700 block">
-                                Código de Autorización
-                              </span>
-                              <strong className="font-mono text-sm text-purple-950">
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className="text-gray-600">Autorización:</span>
+                              <span className="font-semibold text-gray-900 text-right">
                                 {efipayReceipt.authorizationCode}
-                              </strong>
-                            </div>
-                            <div className="p-3.5 bg-white border border-purple-200 rounded-xl">
-                              <span className="text-[10px] font-bold uppercase text-purple-700 block">
-                                Nombre Completo Pagador
                               </span>
-                              <strong className="text-xs text-purple-950">
+                            </div>
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className="text-gray-600">Dirección IP:</span>
+                              <span className="font-semibold text-gray-900 text-right">
+                                {clientIp}
+                              </span>
+                            </div>
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className="text-gray-600">Cliente:</span>
+                              <span className="font-semibold text-gray-900 text-right truncate max-w-[60%]">
                                 {payerFullName}
-                              </strong>
-                            </div>
-                            <div className="p-3.5 bg-white border border-purple-200 rounded-xl">
-                              <span className="text-[10px] font-bold uppercase text-purple-700 block">
-                                Cédula de Ciudadanía
                               </span>
-                              <strong className="font-mono text-xs text-purple-950">
+                            </div>
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className="text-gray-600">Cédula:</span>
+                              <span className="font-semibold text-gray-900 text-right">
                                 {payerCedula}
-                              </strong>
-                            </div>
-                            <div className="p-3.5 bg-white border border-purple-200 rounded-xl">
-                              <span className="text-[10px] font-bold uppercase text-purple-700 block">
-                                Correo Electrónico
                               </span>
-                              <strong className="text-xs text-purple-950 break-all">
-                                {payerEmail}
-                              </strong>
                             </div>
                           </div>
 
-                          <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-purple-100">
+                          {/* Detalle de Pago, Saldo Faltante y Cupo Restante */}
+                          <div className="space-y-2.5 text-xs sm:text-sm border-b border-dashed border-gray-400 pb-4">
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className="font-bold text-black">Cuánto pagó:</span>
+                              <strong className="text-base sm:text-lg font-extrabold text-black text-right">
+                                {formatInstallmentValue(efipayReceipt.amount)}
+                              </strong>
+                            </div>
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className="text-gray-700 font-semibold">Cuánto le falta:</span>
+                              <strong className="font-bold text-gray-900 text-right">
+                                {formatInstallmentValue(saldoPendiente)}
+                              </strong>
+                            </div>
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className="text-gray-700 font-semibold">Cupo que le quedó:</span>
+                              <strong className="font-bold text-gray-900 text-right">
+                                {formatInstallmentValue(cupoDisponibleParaSacar)}
+                              </strong>
+                            </div>
+                            <div className="flex items-baseline justify-between gap-2 text-[11px] sm:text-xs">
+                              <span className="text-gray-500">Límite del cupo:</span>
+                              <span className="text-gray-700 font-semibold text-right">
+                                {formatInstallmentValue(limiteCupoGeneral)}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Pie del Ticket */}
+                          <div className="text-center space-y-1">
+                            <p className="text-xs font-extrabold text-black tracking-wider uppercase">
+                              ESTADO: CUOTA PAGADA
+                            </p>
+                            <p className="text-[11px] text-gray-500">
+                              Ref. {efipayReceipt.referenceCode}
+                            </p>
+                          </div>
+
+                          {/* Botones de Acción */}
+                          <div className="pt-2 flex flex-col gap-2.5 font-sans">
                             <button
                               type="button"
                               onClick={() =>
                                 handleDownloadReceiptPdf(efipayReceipt)
                               }
-                              className="w-full sm:w-auto px-6 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-extrabold rounded-xl flex items-center justify-center gap-2 cursor-pointer transition shadow-xs"
+                              className="w-full py-3 bg-black hover:bg-gray-800 text-white text-xs sm:text-sm font-bold rounded-xl flex items-center justify-center gap-2 cursor-pointer transition"
                             >
                               <Download className="w-4 h-4 shrink-0" />
-                              <span>DESCARGAR COMPROBANTE</span>
+                              <span>Descargar ticket</span>
                             </button>
 
                             <button
@@ -1583,9 +1979,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 setLastCompletedReceipt(null);
                                 setPaymentOutcomeStatus(null);
                               }}
-                              className="w-full sm:w-auto px-6 py-3.5 bg-purple-800 hover:bg-purple-950 text-white text-xs sm:text-sm font-bold rounded-xl cursor-pointer transition"
+                              className="w-full py-3 bg-gray-100 hover:bg-gray-200 text-gray-900 text-xs sm:text-sm font-bold rounded-xl cursor-pointer transition"
                             >
-                              Finalizar y Volver a mi Panel
+                              Cerrar y volver al inicio
                             </button>
                           </div>
                         </div>
@@ -1598,7 +1994,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               </div>
                               <div>
                                 <span className="inline-block text-[11px] font-mono font-extrabold uppercase tracking-wider bg-rose-100 text-rose-900 px-2.5 py-0.5 rounded border border-rose-300">
-                                  Notificación de Pago
+                                  Comprobante de Cancelación
                                 </span>
                                 <h4 className="text-xl sm:text-2xl font-extrabold text-rose-950 tracking-tight mt-1">
                                   PAGO CANCELADO
@@ -1678,53 +2074,152 @@ export const Dashboard: React.FC<DashboardProps> = ({
         )}
 
         {/* =========================================================================
-            4. REGISTRO DE CRÉDITOS ANTERIORES (OCULTO MIENTRAS ESTÁ EN EL WIZARD A PANTALLA COMPLETA)
+            4. REGISTRO DE CRÉDITOS ANTERIORES
            ========================================================================= */}
         {activeBottomSection === 'INICIO' &&
           !isPaidOff &&
           previousLoans.length > 0 && (
             <div className="pt-2 space-y-3 animate-fadeIn">
-              <div className="flex items-center gap-2.5 pb-2.5 border-b border-purple-300/80">
-                <History className="w-4 h-4 text-purple-700 shrink-0" />
-                <h2 className="text-xs sm:text-base font-extrabold text-purple-950 tracking-tight uppercase">
-                  Registro de Créditos Anteriores
+              <div className="flex items-center gap-2">
+                <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                  Registro de créditos anteriores
                 </h2>
-                <div className="flex-1 h-px bg-purple-200/70 ml-2" />
               </div>
 
-              <div className="divide-y divide-purple-200/90 border-b border-purple-200/90">
-                {previousLoans.map(prev => (
-                  <div
-                    key={prev.id}
-                    className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4"
-                  >
-                    <div className="flex items-center gap-3">
-                      <span className="w-4 h-0.5 bg-purple-400 shrink-0" />
-                      <div>
-                        <span className="text-[10px] text-purple-600 font-semibold uppercase block">
-                          Monto Otorgado ({prev.tramiteId})
-                        </span>
-                        <span className="font-mono font-extrabold text-purple-950 text-base sm:text-lg">
+              <div className="divide-y divide-gray-100 border-b border-gray-100">
+                {previousLoans.map(prev => {
+                  const isExpanded = expandedPreviousLoanId === prev.id;
+                  return (
+                    <div key={prev.id} className="py-1.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedPreviousLoanId(curr =>
+                            curr === prev.id ? null : prev.id
+                          )
+                        }
+                        className="w-full py-1 flex items-center justify-between text-left hover:opacity-75 transition cursor-pointer"
+                      >
+                        <span className="font-mono font-bold text-gray-700 text-xs sm:text-sm">
                           {hideBalance
                             ? '••••••••'
-                            : formatMoney(prev.amountGranted)}
+                            : formatInstallmentValue(prev.amountGranted)}
                         </span>
-                      </div>
-                    </div>
+                        <span className="text-gray-400 p-0.5">
+                          {isExpanded ? (
+                            <ChevronUp className="w-4 h-4" />
+                          ) : (
+                            <ChevronDown className="w-4 h-4" />
+                          )}
+                        </span>
+                      </button>
 
-                    <div className="hidden sm:block flex-1 max-w-28 border-t border-dashed border-purple-300/80 mx-4" />
+                      {isExpanded && (
+                        <div className="pt-1.5 pb-1 space-y-1.5 text-[11px] sm:text-xs text-gray-600 animate-fadeIn">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-gray-400 font-medium">
+                              Monto principal (crédito desembolsado)
+                            </span>
+                            <span className="font-mono font-semibold text-gray-800">
+                              {formatInstallmentValue(
+                                prev.principalAmount || prev.amountGranted
+                              )}
+                            </span>
+                          </div>
 
-                    <div className="pl-7 sm:pl-0 sm:text-right">
-                      <span className="text-[10px] text-purple-600 font-semibold uppercase block">
-                        Fecha Finalización ({prev.finalStatus})
-                      </span>
-                      <span className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-mono font-bold text-purple-900">
-                        <Calendar className="w-3.5 h-3.5 text-purple-600 shrink-0" />
-                        <span>{prev.closedDate || prev.startDate}</span>
-                      </span>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-gray-400 font-medium">
+                              Interés (ganancia de la empresa)
+                            </span>
+                            <span className="font-mono text-gray-700">
+                              {formatInstallmentValue(prev.interestAmount || 0)}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-gray-400 font-medium">
+                              Fianza
+                            </span>
+                            <span className="font-mono text-gray-700">
+                              {formatInstallmentValue(prev.fianzaAmount || 0)}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-gray-400 font-medium">
+                              Firma electrónica
+                            </span>
+                            <span className="font-mono text-gray-700">
+                              {formatInstallmentValue(
+                                prev.electronicSignatureFee || 0
+                              )}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-gray-400 font-medium">
+                              Gastos de cobranza
+                            </span>
+                            <span className="font-mono text-gray-700">
+                              {formatInstallmentValue(
+                                prev.collectionExpenses || 0
+                              )}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-gray-400 font-medium">
+                              IVA
+                            </span>
+                            <span className="font-mono text-gray-700">
+                              {formatInstallmentValue(prev.ivaAmount || 0)}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-gray-400 font-medium">
+                              Fecha límite de pago
+                            </span>
+                            <span className="font-mono text-gray-600">
+                              {prev.paymentDeadline || prev.closedDate || prev.startDate}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-gray-500 font-bold">
+                              Pago total
+                            </span>
+                            <strong className="font-mono font-bold text-purple-700">
+                              {formatInstallmentValue(
+                                prev.totalPaymentAmount ||
+                                  prev.totalPaid ||
+                                  prev.amountGranted
+                              )}
+                            </strong>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-gray-400 font-medium">
+                              Referencia
+                            </span>
+                            <span className="font-mono text-gray-600">
+                              {prev.tramiteId}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-gray-400 font-medium">
+                              Estado
+                            </span>
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-100">
+                              {prev.finalStatus.replace(/_/g, ' ')}
+                            </span>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

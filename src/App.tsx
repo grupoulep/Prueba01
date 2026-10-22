@@ -6,7 +6,6 @@
 import React, { useState, useEffect } from 'react';
 import { User, CreditStatus } from './types';
 import { StorageService } from './services/storageService';
-import { notificationService } from './services/notificationService';
 import { Navbar } from './components/Navbar';
 import { LoginForm } from './components/LoginForm';
 import { RegisterForm } from './components/RegisterForm';
@@ -14,7 +13,6 @@ import { Dashboard } from './components/Dashboard';
 import { AdminPanel } from './components/AdminPanel';
 import { PasswordRecoveryModal } from './components/PasswordRecoveryModal';
 import { PrivacyPolicyModal } from './components/PrivacyPolicyModal';
-import { PushNotificationToast } from './components/PushNotificationToast';
 import { Footer } from './components/Footer';
 import { ShieldCheck } from 'lucide-react';
 
@@ -70,20 +68,6 @@ export default function App() {
         user.cedula,
         `Ingreso directo autenticado al portal (${user.role || 'CLIENT'}).`
       );
-
-      if (user.creditStatus === 'PENDIENTE' && (!user.role || user.role === 'CLIENT')) {
-        notificationService.sendPush({
-          title: 'CrediULEP - Crédito en Evaluación',
-          message: 'Pronto validaremos tus datos para que puedas disfrutar de tu crédito.',
-          type: 'credit_pending'
-        });
-      } else {
-        notificationService.sendPush({
-          title: 'Sesión Iniciada',
-          message: `Hola ${user.fullName}, bienvenido/a a tu portal CrediULEP.`,
-          type: 'login_2fa'
-        });
-      }
     });
   }, [triggerBlockTransition]);
 
@@ -103,11 +87,6 @@ export default function App() {
         const registeredUser = result.user;
         triggerBlockTransition(() => {
           setCurrentUser(registeredUser);
-          notificationService.sendPush({
-            title: '¡Bienvenido/a a CrediULEP!',
-            message: 'Pronto validaremos tus datos para que puedas disfrutar de tu crédito.',
-            type: 'credit_pending'
-          });
         });
         return { success: true };
       } else {
@@ -317,8 +296,7 @@ export default function App() {
         )}
       </div>
 
-      {/* Push Notification Toast */}
-      <PushNotificationToast />
+
 
       {isRecoveryModalOpen && (
         <PasswordRecoveryModal

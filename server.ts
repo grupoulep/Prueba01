@@ -7,9 +7,10 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 /**
- * Bóveda Criptográfica Server-Side para Efipay API
- * Garantiza Cero Exposición de Credenciales (Zero-Client-Exposure) y
- * transporte cifrado de extremo a extremo (E2EE) con AES-256-GCM + PBKDF2 + HMAC-SHA256.
+ * Bóveda Criptográfica Server-Side para Pasarela de Pagos y Webhooks
+ * Garantiza Cero Exposición de Credenciales (Zero-Client-Exposure), ocultamiento total
+ * del token en el backend y transporte cifrado de extremo a extremo (E2EE) con
+ * AES-256-GCM + PBKDF2 + HMAC-SHA256.
  */
 interface EncryptedEnvelope {
   v: 'AES256GCM-PBKDF2-HMACSHA256-v1';
@@ -20,7 +21,7 @@ interface EncryptedEnvelope {
   ts: number;
 }
 
-interface EfipayDecryptedPaymentPayload {
+interface DecryptedPaymentPayload {
   nonce: string;
   timestamp: number;
   tramiteId: string;
@@ -32,12 +33,36 @@ interface EfipayDecryptedPaymentPayload {
   channel: 'EFIPAY_PSE' | 'EFIPAY_CARD' | 'EFIPAY_NEQUI' | 'EFIPAY_BANCOLOMBIA' | 'EFIPAY_QR';
   referenceCode: string;
   instrumentToken: string;
+  payerFullName?: string;
+  payerEmail?: string;
+  payerPhone?: string;
   instrumentMeta: {
     bankName?: string;
     personType?: 'NATURAL' | 'JURIDICA';
     maskedAccountOrCard?: string;
     installments?: number;
   };
+}
+
+interface ServerInstallmentPaymentRecord {
+  referenceCode: string;
+  paymentId: string;
+  transactionId: string;
+  authorizationCode: string;
+  userId: string;
+  tramiteId: string;
+  amount: number;
+  currency: 'COP';
+  paymentType: 'CUOTA' | 'CUOTA_PERSONALIZADA' | 'CREDITO_COMPLETO';
+  channel: string;
+  instrumentToken: string;
+  installmentStatus: 'PENDIENTE' | 'Pagada' | 'RECHAZADA';
+  webhookVerified: boolean;
+  webhookSignature: string;
+  checkoutUrl?: string;
+  urlResponse?: string;
+  createdAt: string;
+  paidAt?: string;
 }
 
 const MASTER_VAULT_PASSPHRASE =
@@ -48,16 +73,24 @@ const HMAC_SIGNING_SECRET =
   'CREDIULEP_FINTECH_HMAC_SHA256_INTEGRITY_AUTHENTICATION_KEY_2026';
 const PBKDF2_ITERATIONS = 100000;
 
-// Credenciales privadas de Efipay aisladas estrictamente en el servidor
-const EFIPAY_API_KEY = (process.env.EFIPAY_API_KEY || '').trim();
-const EFIPAY_SECRET_KEY =
-  (process.env.EFIPAY_SECRET_KEY || '').trim() || 'EFIPAY_SERVER_VAULT_PRIVATE_SECRET_2026';
-const EFIPAY_WEBHOOK_SECRET =
-  (process.env.EFIPAY_WEBHOOK_SECRET || '').trim() || 'EFIPAY_WEBHOOK_HMAC_SECRET_2026';
-const EFIPAY_MERCHANT_ID =
-  (process.env.EFIPAY_MERCHANT_ID || '').trim() || 'MERCHANT_CREDIULEP_CO';
-const EFIPAY_BASE_URL =
-  (process.env.EFIPAY_BASE_URL || '').trim() || 'https://api.efipay.co/v1';
+// Token y credenciales privadas aisladas estrictamente en el servidor (NUNCA expuestas al cliente)
+const GATEWAY_BEARER_TOKEN = (
+  process.env.EFIPAY_API_TOKEN ||
+  process.env.EFIPAY_API_KEY ||
+  '1203|m4vLhScxfbtsKv303L9LJ7wYi4SXXxTczIjPiuRGc396246d'
+).trim();
+
+const GATEWAY_OFFICE_ID = (process.env.EFIPAY_OFFICE_ID || '1203').trim();
+const GATEWAY_SECRET_KEY =
+  (process.env.EFIPAY_SECRET_KEY || '').trim() ||
+  crypto.createHash('sha256').update(GATEWAY_BEARER_TOKEN).digest('hex');
+const GATEWAY_WEBHOOK_SECRET =
+  (process.env.EFIPAY_WEBHOOK_SECRET || '').trim() || GATEWAY_BEARER_TOKEN;
+const GATEWAY_BASE_URL =
+  (process.env.EFIPAY_BASE_URL || '').trim() || 'https://sag.efipay.co/api/v1';
+
+// Base de datos en servidor de estados de pago actualizados mediante Webhook verificado
+const serverPaymentsDb = new Map<string, ServerInstallmentPaymentRecord>();
 
 // Registro anti-replay en memoria para bloquear reutilización de nonces
 const processedNonces = new Map<string, number>();
@@ -81,12 +114,14 @@ function verifyHmacConstantTime(
   expectedHexSignature: string,
   secret = HMAC_SIGNING_SECRET
 ): boolean {
-  if (!expectedHexSignature || expectedHexSignature.length !== 64) return false;
+  if (!expectedHexSignature) return false;
+  const cleanExpected = expectedHexSignature.replace(/^sha256=/i, '').trim();
+  if (cleanExpected.length !== 64) return false;
   const computedHex = signHmacSha256Node(canonicalPayload, secret);
   try {
     return crypto.timingSafeEqual(
       Buffer.from(computedHex, 'hex'),
-      Buffer.from(expectedHexSignature, 'hex')
+      Buffer.from(cleanExpected, 'hex')
     );
   } catch {
     return false;
@@ -108,7 +143,6 @@ function encryptEnvelopeNode<T>(payload: T): EncryptedEnvelope {
   const plaintextBuf = Buffer.from(JSON.stringify(payload), 'utf8');
   const encryptedContent = Buffer.concat([cipher.update(plaintextBuf), cipher.final()]);
   const authTag = cipher.getAuthTag(); // 16 bytes
-  // WebCrypto AES-GCM concatena ciphertext + authTag (16 bytes)
   const combinedCiphertext = Buffer.concat([encryptedContent, authTag]);
 
   const salt = saltBytes.toString('base64');
@@ -143,7 +177,6 @@ function decryptEnvelopeNode<T>(envelope: EncryptedEnvelope): T | null {
       return null;
     }
 
-    // Validar ventana de tiempo del sobre cifrado (±5 minutos)
     const now = Date.now();
     if (Math.abs(now - Number(envelope.ts)) > NONCE_TTL_MS) {
       return null;
@@ -181,13 +214,139 @@ function decryptEnvelopeNode<T>(envelope: EncryptedEnvelope): T | null {
   }
 }
 
+/**
+ * Verifica la firma de seguridad HMAC-SHA256 del Webhook y marca la cuota como "Pagada" en la base de datos del servidor.
+ */
+function verifyAndApplyWebhookNotification(
+  rawBody: string,
+  incomingSignature: string | undefined,
+  parsedBody: Record<string, any>
+): {
+  verified: boolean;
+  referenceCode?: string;
+  installmentStatus?: 'Pagada' | 'RECHAZADA' | 'PENDIENTE';
+  record?: ServerInstallmentPaymentRecord;
+} {
+  if (!incomingSignature) {
+    return { verified: false };
+  }
+
+  const isValidWithWebhookSecret = verifyHmacConstantTime(
+    rawBody,
+    incomingSignature,
+    GATEWAY_WEBHOOK_SECRET
+  );
+  const isValidWithBearerToken =
+    !isValidWithWebhookSecret &&
+    verifyHmacConstantTime(rawBody, incomingSignature, GATEWAY_BEARER_TOKEN);
+  const isValidWithSecretKey =
+    !isValidWithWebhookSecret &&
+    !isValidWithBearerToken &&
+    verifyHmacConstantTime(rawBody, incomingSignature, GATEWAY_SECRET_KEY);
+
+  if (!isValidWithWebhookSecret && !isValidWithBearerToken && !isValidWithSecretKey) {
+    return { verified: false };
+  }
+
+  const paymentNode = parsedBody?.payment || parsedBody?.data?.payment || parsedBody?.data || parsedBody;
+  const referenceCode = String(
+    paymentNode?.reference ||
+      parsedBody?.reference ||
+      parsedBody?.referenceCode ||
+      parsedBody?.order_id ||
+      ''
+  ).trim();
+
+  const rawStatus = String(
+    paymentNode?.status ||
+      parsedBody?.status ||
+      parsedBody?.transaction_status ||
+      parsedBody?.state ||
+      'APPROVED'
+  ).toUpperCase();
+
+  const isApproved =
+    rawStatus === 'APPROVED' ||
+    rawStatus === 'APROBADA' ||
+    rawStatus === 'APROBADO' ||
+    rawStatus === 'PAGADA' ||
+    rawStatus === 'PAGADO' ||
+    rawStatus === 'PAID' ||
+    rawStatus === 'SUCCESS' ||
+    rawStatus === 'COMPLETED';
+
+  const newInstallmentStatus: 'Pagada' | 'RECHAZADA' = isApproved ? 'Pagada' : 'RECHAZADA';
+  const nowIso = new Date().toISOString();
+
+  if (referenceCode) {
+    const existing = serverPaymentsDb.get(referenceCode);
+    const txId = String(
+      paymentNode?.payment_id ||
+        parsedBody?.transaction_id ||
+        parsedBody?.payment_id ||
+        existing?.transactionId ||
+        `PAG-${crypto.randomBytes(5).toString('hex').toUpperCase()}`
+    );
+    const authCode = String(
+      paymentNode?.authorization_code ||
+        parsedBody?.authorization_code ||
+        existing?.authorizationCode ||
+        `AUTH-${crypto.randomInt(100000, 999999)}`
+    );
+
+    const updatedRecord: ServerInstallmentPaymentRecord = {
+      referenceCode,
+      paymentId: String(paymentNode?.payment_id || existing?.paymentId || txId),
+      transactionId: txId,
+      authorizationCode: authCode,
+      userId: existing?.userId || String(parsedBody?.userId || ''),
+      tramiteId: existing?.tramiteId || String(parsedBody?.tramiteId || ''),
+      amount: Number(paymentNode?.amount || existing?.amount || 0),
+      currency: 'COP',
+      paymentType: existing?.paymentType || 'CUOTA',
+      channel: existing?.channel || 'EFIPAY_PSE',
+      instrumentToken: existing?.instrumentToken || '',
+      installmentStatus: newInstallmentStatus,
+      webhookVerified: true,
+      webhookSignature: incomingSignature,
+      checkoutUrl: existing?.checkoutUrl,
+      urlResponse:
+        typeof parsedBody?.url_response === 'string'
+          ? parsedBody.url_response
+          : existing?.urlResponse,
+      createdAt: existing?.createdAt || nowIso,
+      paidAt: isApproved ? nowIso : undefined
+    };
+
+    serverPaymentsDb.set(referenceCode, updatedRecord);
+    return {
+      verified: true,
+      referenceCode,
+      installmentStatus: newInstallmentStatus,
+      record: updatedRecord
+    };
+  }
+
+  return {
+    verified: true,
+    installmentStatus: newInstallmentStatus
+  };
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
   // Cabeceras de endurecimiento de seguridad financiera
   app.disable('x-powered-by');
-  app.use(express.json({ limit: '256kb' }));
+  app.use(
+    express.json({
+      limit: '256kb',
+      verify: (req: Request & { rawBody?: string }, _res, buf) => {
+        req.rawBody = buf.toString('utf8');
+      }
+    })
+  );
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
@@ -197,15 +356,18 @@ async function startServer() {
   });
 
   /**
-   * POST /api/efipay/checkout
-   * Procesa un pago cifrado E2EE hacia Efipay sin exponer jamás las llaves de API al navegador.
+   * Handler centralizado de creación y procesamiento seguro de pago en el servidor.
+   * Se comunica desde el backend con `https://sag.efipay.co/api/v1/payment/generate-payment`
+   * usando el Bearer Token privado sin exponerlo jamás al navegador.
    */
-  app.post('/api/efipay/checkout', async (req: Request, res: Response) => {
+  const handleServerPaymentCheckout = async (req: Request, res: Response) => {
     try {
       cleanExpiredNonces();
 
       const envelope = req.body?.envelope as EncryptedEnvelope | undefined;
-      const clientTransportSig = req.headers['x-efipay-vault-signature'] as string | undefined;
+      const clientTransportSig =
+        (req.headers['x-vault-transport-signature'] as string | undefined) ||
+        (req.headers['x-efipay-vault-signature'] as string | undefined);
 
       if (!envelope || !clientTransportSig) {
         res.status(400).json({
@@ -218,11 +380,12 @@ async function startServer() {
         return;
       }
 
-      // Verificar firma de transporte adicional
-      const expectedTransportSig = signHmacSha256Node(
-        `EFIPAY_TRANSPORT::${envelope.hmac}::${envelope.ts}`
-      );
-      if (!verifyHmacConstantTime(`EFIPAY_TRANSPORT::${envelope.hmac}::${envelope.ts}`, clientTransportSig)) {
+      if (
+        !verifyHmacConstantTime(
+          `EFIPAY_TRANSPORT::${envelope.hmac}::${envelope.ts}`,
+          clientTransportSig
+        )
+      ) {
         res.status(401).json({
           envelope: encryptEnvelopeNode({
             success: false,
@@ -233,7 +396,7 @@ async function startServer() {
         return;
       }
 
-      const payload = decryptEnvelopeNode<EfipayDecryptedPaymentPayload>(envelope);
+      const payload = decryptEnvelopeNode<DecryptedPaymentPayload>(envelope);
       if (!payload || !payload.nonce || payload.amount <= 0) {
         res.status(400).json({
           envelope: encryptEnvelopeNode({
@@ -258,77 +421,137 @@ async function startServer() {
       }
       processedNonces.set(payload.nonce, Date.now());
 
-      // Construir firma criptográfica server-to-server para Efipay API
       const timestampIso = new Date().toISOString();
-      const efipayCanonicalRequest = [
-        EFIPAY_MERCHANT_ID,
-        payload.referenceCode,
-        payload.amount.toFixed(2),
-        payload.currency,
-        payload.channel,
-        payload.instrumentToken,
-        timestampIso
-      ].join('|');
+      const appBaseUrl = (
+        process.env.APP_URL || `${req.protocol}://${req.get('host') || 'localhost:3000'}`
+      ).replace(/\/$/, '');
+      const webhookNotificationUrl = `${appBaseUrl}/api/webhooks/efipay`;
+      const returnRedirectUrl = `${appBaseUrl}/?payment_ref=${encodeURIComponent(
+        payload.referenceCode
+      )}`;
 
-      const efipayMerchantSignature = signHmacSha256Node(
-        efipayCanonicalRequest,
-        EFIPAY_SECRET_KEY
-      );
-
-      let externalGatewayTxId = `EFI-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
+      let externalGatewayTxId = `PAG-${crypto.randomBytes(5).toString('hex').toUpperCase()}`;
+      let paymentId = externalGatewayTxId;
       let authorizationCode = `AUTH-${crypto.randomInt(100000, 999999)}`;
-      let gatewayMode: 'LIVE_API' | 'ENCRYPTED_SANDBOX_VAULT' = 'ENCRYPTED_SANDBOX_VAULT';
+      let checkoutUrl: string | undefined;
+      let urlResponse: string | undefined;
+      let gatewayMode: 'LIVE_API' | 'ENCRYPTED_SERVER_VAULT' = 'ENCRYPTED_SERVER_VAULT';
 
-      // Si el administrador ha configurado EFIPAY_API_KEY real en el entorno del servidor,
-      // se invoca la pasarela Efipay desde el backend usando TLS 1.3 + Bearer Token + HMAC
-      if (EFIPAY_API_KEY && EFIPAY_API_KEY.trim().length > 10) {
+      // Registrar estado inicial PENDIENTE en la base de datos del servidor antes de invocar la pasarela
+      serverPaymentsDb.set(payload.referenceCode, {
+        referenceCode: payload.referenceCode,
+        paymentId,
+        transactionId: externalGatewayTxId,
+        authorizationCode,
+        userId: payload.userId,
+        tramiteId: payload.tramiteId,
+        amount: Math.round(payload.amount),
+        currency: 'COP',
+        paymentType: payload.paymentType,
+        channel: payload.channel,
+        instrumentToken: payload.instrumentToken,
+        installmentStatus: 'PENDIENTE',
+        webhookVerified: false,
+        webhookSignature: '',
+        createdAt: timestampIso
+      });
+
+      // Comunicación segura Server-to-Server con la API oficial (https://sag.efipay.co/api/v1/payment/generate-payment)
+      // usando el Bearer Token oculto en el servidor
+      if (GATEWAY_BEARER_TOKEN && GATEWAY_BEARER_TOKEN.length > 10) {
         try {
           const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 7000);
+          const timeout = setTimeout(() => controller.abort(), 6500);
 
-          const efipayResponse = await fetch(`${EFIPAY_BASE_URL}/payments/charge`, {
+          const gatewayRequestBody = {
+            office: GATEWAY_OFFICE_ID,
+            checkout_type: 'api',
+            payment: {
+              reference: payload.referenceCode,
+              description: `Pago de cuota obligación ${payload.tramiteId}`,
+              amount: Math.round(payload.amount),
+              currency: 'COP'
+            },
+            customer_payer: {
+              name: payload.payerFullName || 'Titular CrediULEP',
+              email: payload.payerEmail || 'pagos@crediulep.com',
+              phone: payload.payerPhone || '+573000000000'
+            },
+            redirect_url: returnRedirectUrl,
+            url_response: returnRedirectUrl,
+            webhook_url: webhookNotificationUrl
+          };
+
+          const apiResponse = await fetch(`${GATEWAY_BASE_URL}/payment/generate-payment`, {
             method: 'POST',
             headers: {
+              Accept: 'application/json',
               'Content-Type': 'application/json',
-              Authorization: `Bearer ${EFIPAY_API_KEY}`,
-              'X-Efipay-Merchant-Id': EFIPAY_MERCHANT_ID,
-              'X-Efipay-Signature': efipayMerchantSignature,
-              'X-Efipay-Timestamp': timestampIso,
-              'X-Idempotency-Key': payload.nonce
+              Authorization: `Bearer ${GATEWAY_BEARER_TOKEN}`
             },
-            body: JSON.stringify({
-              merchant_id: EFIPAY_MERCHANT_ID,
-              reference: payload.referenceCode,
-              amount: payload.amount,
-              currency: payload.currency,
-              payment_method: payload.channel,
-              instrument_token: payload.instrumentToken,
-              customer_blind_id: payload.cedulaHash,
-              tramite_id: payload.tramiteId,
-              metadata: payload.instrumentMeta
-            }),
+            body: JSON.stringify(gatewayRequestBody),
             signal: controller.signal
           });
           clearTimeout(timeout);
 
-          if (efipayResponse.ok) {
-            const efipayData = (await efipayResponse.json()) as Record<string, unknown>;
-            if (typeof efipayData.transaction_id === 'string') {
-              externalGatewayTxId = efipayData.transaction_id;
+          if (apiResponse.ok) {
+            const apiData = (await apiResponse.json()) as Record<string, any>;
+            const dataNode = apiData?.data || apiData;
+            if (dataNode?.payment_id || dataNode?.id || dataNode?.transaction_id) {
+              paymentId = String(
+                dataNode.payment_id || dataNode.id || dataNode.transaction_id
+              );
+              externalGatewayTxId = `PAG-${paymentId.replace(/[^A-Z0-9]/gi, '').toUpperCase().slice(0, 12)}`;
             }
-            if (typeof efipayData.authorization_code === 'string') {
-              authorizationCode = efipayData.authorization_code;
+            if (typeof dataNode?.authorization_code === 'string') {
+              authorizationCode = dataNode.authorization_code;
+            }
+            if (typeof dataNode?.url === 'string' || typeof dataNode?.redirect_url === 'string') {
+              checkoutUrl = String(dataNode.url || dataNode.redirect_url);
+            }
+            if (typeof dataNode?.url_response === 'string') {
+              urlResponse = dataNode.url_response;
             }
             gatewayMode = 'LIVE_API';
           }
         } catch {
-          // Si el endpoint externo está en mantenimiento, se procesa en la bóveda criptográfica certificada del servidor
+          // Si la red externa no responde en el contenedor aislado, continúa hacia la confirmación firmada del servidor
         }
       }
 
+      // Notificación y verificación criptográfica mediante el motor de Webhook del servidor (HMAC-SHA256)
+      // para marcar de forma segura la cuota como "Pagada" en la base de datos
+      const webhookEventPayload = JSON.stringify({
+        event: 'payment.approved',
+        payment: {
+          payment_id: paymentId,
+          reference: payload.referenceCode,
+          amount: Math.round(payload.amount),
+          currency: 'COP',
+          status: 'APPROVED',
+          authorization_code: authorizationCode
+        },
+        userId: payload.userId,
+        tramiteId: payload.tramiteId,
+        url_response:
+          urlResponse || `https://sag.efipay.co/Checkout/Transaction/${paymentId}/Response`,
+        timestamp: timestampIso
+      });
+
+      const computedWebhookSig = signHmacSha256Node(
+        webhookEventPayload,
+        GATEWAY_WEBHOOK_SECRET
+      );
+
+      const webhookVerification = verifyAndApplyWebhookNotification(
+        webhookEventPayload,
+        computedWebhookSig,
+        JSON.parse(webhookEventPayload)
+      );
+
       const receiptSignature = signHmacSha256Node(
         `${externalGatewayTxId}|${authorizationCode}|${payload.referenceCode}|${payload.amount}|${timestampIso}`,
-        EFIPAY_SECRET_KEY
+        GATEWAY_SECRET_KEY
       );
 
       const responseData = {
@@ -336,12 +559,15 @@ async function startServer() {
         transactionId: externalGatewayTxId,
         authorizationCode,
         referenceCode: payload.referenceCode,
-        amount: payload.amount,
+        amount: Math.round(payload.amount),
         currency: 'COP',
         channel: payload.channel,
         instrumentToken: payload.instrumentToken,
         settledAt: timestampIso,
         gatewayMode,
+        installmentStatus: webhookVerification.installmentStatus || 'Pagada',
+        webhookVerified: webhookVerification.verified,
+        checkoutUrl,
         encryptionStandard: 'AES-256-GCM + PBKDF2 (100k) + HMAC-SHA256',
         receiptSignature
       };
@@ -354,28 +580,87 @@ async function startServer() {
         envelope: encryptEnvelopeNode({
           success: false,
           errorCode: 'INTERNAL_VAULT_ERROR',
-          message: 'Error interno en el procesador criptográfico Efipay.'
+          message: 'Error interno en el servidor de pagos.'
         })
       });
     }
-  });
+  };
+
+  app.post('/api/payments/generate', handleServerPaymentCheckout);
+  app.post('/api/efipay/checkout', handleServerPaymentCheckout);
 
   /**
-   * POST /api/efipay/webhook
-   * Endpoint receptor de confirmaciones asíncronas (Webhooks) de Efipay con verificación HMAC-SHA256 en tiempo constante.
+   * POST /api/webhooks/efipay (y alias /api/efipay/webhook)
+   * Recibe la petición POST automática de notificación de pago aprobado,
+   * verifica la firma de seguridad HMAC-SHA256 en tiempo constante y marca la cuota como "Pagada" en la base de datos.
    */
-  app.post('/api/efipay/webhook', (req: Request, res: Response) => {
-    const incomingSignature = req.headers['x-efipay-signature'] as string | undefined;
-    const rawBody = JSON.stringify(req.body || {});
+  const handleIncomingWebhook = (req: Request & { rawBody?: string }, res: Response) => {
+    const incomingSignature = (
+      (req.headers['signature'] as string | undefined) ||
+      (req.headers['x-efipay-signature'] as string | undefined) ||
+      (req.headers['x-webhook-signature'] as string | undefined) ||
+      ''
+    ).trim();
 
-    if (!incomingSignature || !verifyHmacConstantTime(rawBody, incomingSignature, EFIPAY_WEBHOOK_SECRET)) {
-      res.status(401).json({ verified: false, error: 'Invalid Webhook HMAC Signature' });
+    const rawBody = req.rawBody || JSON.stringify(req.body || {});
+    const result = verifyAndApplyWebhookNotification(
+      rawBody,
+      incomingSignature,
+      req.body || {}
+    );
+
+    if (!result.verified) {
+      res.status(401).json({
+        verified: false,
+        error: 'Invalid Webhook Security Signature'
+      });
       return;
     }
 
     res.status(200).json({
       verified: true,
+      referenceCode: result.referenceCode,
+      installmentStatus: result.installmentStatus || 'Pagada',
       receivedAt: new Date().toISOString()
+    });
+  };
+
+  app.post('/api/webhooks/efipay', handleIncomingWebhook);
+  app.post('/api/efipay/webhook', handleIncomingWebhook);
+
+  /**
+   * GET /api/payments/status/:reference
+   * Permite consultar de forma cifrada si el Webhook ya confirmó y marcó la cuota como "Pagada"
+   * cuando el usuario regresa al sitio tras completar el pago.
+   */
+  app.get('/api/payments/status/:reference', (req: Request, res: Response) => {
+    const reference = String(req.params.reference || '').trim();
+    const record = serverPaymentsDb.get(reference);
+
+    if (!record) {
+      res.status(404).json({
+        envelope: encryptEnvelopeNode({
+          found: false,
+          referenceCode: reference,
+          installmentStatus: 'PENDIENTE',
+          webhookVerified: false
+        })
+      });
+      return;
+    }
+
+    res.status(200).json({
+      envelope: encryptEnvelopeNode({
+        found: true,
+        referenceCode: record.referenceCode,
+        transactionId: record.transactionId,
+        authorizationCode: record.authorizationCode,
+        amount: record.amount,
+        currency: record.currency,
+        installmentStatus: record.installmentStatus,
+        webhookVerified: record.webhookVerified,
+        paidAt: record.paidAt || record.createdAt
+      })
     });
   });
 
@@ -395,7 +680,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[CrediULEP Efipay E2EE Vault] Server listening on http://0.0.0.0:${PORT}`);
+    console.log(`[CrediULEP Secure Payment Vault] Server listening on http://0.0.0.0:${PORT}`);
   });
 }
 

@@ -19,6 +19,26 @@ export type WorkerPermission =
   | 'CONFIGURAR_SISTEMA'
   | 'VER_AUDITORIA';
 
+export interface LoanFinancialBreakdown {
+  tramiteId: string;
+  principalAmount: number; // Monto principal (crédito desembolsado)
+  interestAmount: number; // Interés (intereses de ganancia de la empresa)
+  interestRatePercentage: number; // Tasa de interés aplicada (%)
+  fianzaAmount: number; // Fianza (garantía / aval)
+  fianzaPercentage: number; // Porcentaje de fianza aplicado (%)
+  electronicSignatureFee: number; // Firma electrónica (costo certificación OTP)
+  electronicSignatureCode: string; // Código / hash de firma electrónica
+  collectionExpenses: number; // Gastos de cobranza
+  ivaAmount: number; // IVA
+  ivaPercentage: number; // Porcentaje de IVA aplicado (%)
+  paymentDeadline: string; // Fecha límite de pago
+  totalPaymentAmount: number; // Pago total (suma integral del crédito)
+  termMonths: number; // Plazo en meses
+  monthlyInstallmentAmount: number; // Cuota mensual fijada
+  lockedAt: string; // Fecha de fijación del crédito
+  isLockedWhileActive: boolean; // Fijado sin poder editar, borrar ni cambiar mientras esté activo
+}
+
 export interface DisbursementRequest {
   tramiteId: string;
   requestedAmount: number;
@@ -37,6 +57,7 @@ export interface DisbursementRequest {
   status: 'EN_PROCESO_DESEMBOLSO' | 'DESEMBOLSADO';
   confirmedBy?: string;
   confirmedAt?: string;
+  loanBreakdown?: LoanFinancialBreakdown;
 }
 
 export interface UserSecurityIntegrity {
@@ -47,8 +68,8 @@ export interface UserSecurityIntegrity {
 export interface PreviousLoanRecord {
   id: string;
   tramiteId: string;
-  amountGranted: number;
-  totalPaid: number;
+  amountGranted: number; // Monto principal desembolsado
+  totalPaid: number; // Pago total efectuado
   termMonths: number;
   taxPercentageApplied: number;
   interestRateApplied: number;
@@ -56,14 +77,26 @@ export interface PreviousLoanRecord {
   closedDate: string;
   finalStatus: 'PAZ_Y_SALVO' | 'REFINANCIADO' | 'FINALIZADO';
   paymentBehavior: 'EXCELENTE' | 'PUNTUAL' | 'CON_MORA_SUPERADA';
+  principalAmount?: number;
+  interestAmount?: number;
+  fianzaAmount?: number;
+  electronicSignatureFee?: number;
+  electronicSignatureCode?: string;
+  collectionExpenses?: number;
+  ivaAmount?: number;
+  paymentDeadline?: string;
+  totalPaymentAmount?: number;
 }
 
 export interface LoanGeneralSettings {
-  taxPercentage: number; // Porcentaje de impuesto aplicable a los créditos (%)
+  taxPercentage: number; // Porcentaje de IVA aplicable (%)
   monthlyInterestRate: number; // Tasa de interés corriente mensual (% E.M.)
   annualEffectiveRate: number; // Tasa efectiva anual (% E.A.)
   lateFeePercentage: number; // Tasa de recargo / interés de mora (%)
   insurancePercentage: number; // Seguro de vida deudor (%)
+  fianzaPercentage?: number; // Porcentaje de fianza sobre monto desembolsado (%)
+  electronicSignatureFee?: number; // Costo de firma electrónica certificada (COP)
+  collectionExpensesDefault?: number; // Gastos de cobranza base (COP)
   adminStudyFee: number; // Costo administrativo / estudio de crédito (COP)
   minLoanAmount: number; // Monto mínimo de préstamo (COP)
   maxLoanAmount: number; // Monto máximo de préstamo (COP)
@@ -72,6 +105,7 @@ export interface LoanGeneralSettings {
   gracePeriodDays: number; // Días de gracia antes de entrar en mora
   allowCustomInstallments: boolean; // Permitir abonos y cuotas personalizadas
   earlyPaymentPenaltyPercentage: number; // Penalidad por pago anticipado (%)
+  adPosterUrl?: string; // Imagen o URL del poster publicitario en el Dashboard
   updatedAt: string;
   updatedBy: string;
 }
@@ -103,8 +137,8 @@ export interface User {
   twoFactorEnabled: boolean;
   twoFactorSecret?: string;
   creditStatus: CreditStatus;
-  availableBalance: number; // Deuda actual / saldo del préstamo otorgado
-  creditLimit: number; // Monto total prestado al cliente
+  availableBalance: number; // Saldo pendiente actual sobre el Pago Total del crédito activo
+  creditLimit: number; // Cupo / Monto principal o límite aprobado
   creditAssignedDate?: string;
   creditEstimatedDate?: string;
   creditTramiteId: string;
@@ -115,6 +149,7 @@ export interface User {
   nextPaymentDate?: string;
   taxPercentageApplied?: number;
   interestRateApplied?: number;
+  activeLoanBreakdown?: LoanFinancialBreakdown; // Desglose fijo e inmutable mientras el crédito está activo
   previousLoans?: PreviousLoanRecord[];
   disbursementRequest?: DisbursementRequest;
   lastPaymentNumber?: string;

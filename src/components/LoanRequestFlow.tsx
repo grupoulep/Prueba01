@@ -11,7 +11,8 @@ import {
   ArrowRight,
   ArrowLeft,
   Mail,
-  Phone
+  Phone,
+  Lock
 } from 'lucide-react';
 import { StorageService } from '../services/storageService';
 import { notificationService } from '../services/notificationService';
@@ -108,30 +109,6 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
       maximumFractionDigits: 0
     }).format(val);
 
-  const calculateInstallmentForTerm = (amount: number, months: number) => {
-    const monthlyRate =
-      (user.interestRateApplied ?? loanSettings.monthlyInterestRate ?? 1.85) /
-      100;
-    const taxRate =
-      (user.taxPercentageApplied ?? loanSettings.taxPercentage ?? 4.5) / 100;
-    const principalWithTax = amount * (1 + taxRate * 0.25);
-    const totalWithInterest =
-      principalWithTax * (1 + monthlyRate * Math.min(months, 12) * 0.35);
-    return Math.round(totalWithInterest / Math.max(1, months));
-  };
-
-  const estimatedMonthlyInstallment = useMemo(
-    () => calculateInstallmentForTerm(requestedAmount, requestedTermMonths),
-    [
-      requestedAmount,
-      requestedTermMonths,
-      user.interestRateApplied,
-      user.taxPercentageApplied,
-      loanSettings.monthlyInterestRate,
-      loanSettings.taxPercentage
-    ]
-  );
-
   const computedFirstPaymentDate = useMemo(() => {
     const now = new Date();
     const nextMonth = new Date(
@@ -152,6 +129,57 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
     return finalDate.toISOString().split('T')[0];
   }, [requestedTermMonths, selectedPaymentDay]);
 
+  const liveBreakdown = useMemo(() => {
+    return StorageService.buildFixedLoanBreakdown({
+      principalAmount: requestedAmount,
+      termMonths: requestedTermMonths,
+      interestRatePercentage:
+        user.interestRateApplied ?? loanSettings.monthlyInterestRate ?? 1.85,
+      fianzaPercentage: loanSettings.fianzaPercentage ?? 3.5,
+      electronicSignatureFee: loanSettings.electronicSignatureFee ?? 28500,
+      collectionExpenses: loanSettings.collectionExpensesDefault ?? 0,
+      ivaPercentage:
+        user.taxPercentageApplied ?? loanSettings.taxPercentage ?? 19,
+      paymentDeadline: `Día ${String(selectedPaymentDay).padStart(
+        2,
+        '0'
+      )} (${computedFirstPaymentDate})`,
+      electronicSignatureCode: generatedOtp
+        ? `OTP-${generatedOtp}`
+        : 'FIRMA-OTP-PENDIENTE'
+    });
+  }, [
+    requestedAmount,
+    requestedTermMonths,
+    user.interestRateApplied,
+    user.taxPercentageApplied,
+    loanSettings.monthlyInterestRate,
+    loanSettings.fianzaPercentage,
+    loanSettings.electronicSignatureFee,
+    loanSettings.collectionExpensesDefault,
+    loanSettings.taxPercentage,
+    selectedPaymentDay,
+    computedFirstPaymentDate,
+    generatedOtp
+  ]);
+
+  const calculateInstallmentForTerm = (amount: number, months: number) => {
+    const bd = StorageService.buildFixedLoanBreakdown({
+      principalAmount: amount,
+      termMonths: months,
+      interestRatePercentage:
+        user.interestRateApplied ?? loanSettings.monthlyInterestRate ?? 1.85,
+      fianzaPercentage: loanSettings.fianzaPercentage ?? 3.5,
+      electronicSignatureFee: loanSettings.electronicSignatureFee ?? 28500,
+      collectionExpenses: loanSettings.collectionExpensesDefault ?? 0,
+      ivaPercentage:
+        user.taxPercentageApplied ?? loanSettings.taxPercentage ?? 19
+    });
+    return bd.monthlyInstallmentAmount;
+  };
+
+  const estimatedMonthlyInstallment = liveBreakdown.monthlyInstallmentAmount;
+
   const generateAndSendOtpToPhone = (targetPhone: string) => {
     setStepError(null);
     const array = new Uint32Array(1);
@@ -160,13 +188,6 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
     setGeneratedOtp(code);
     setOtpInput('');
 
-    notificationService.sendPush({
-      title: `Código OTP enviado a ${targetPhone}`,
-      message: `Tu código de firma electrónica para el crédito por ${formatMoney(
-        requestedAmount
-      )} es: ${code}. Ingresa este código y haz clic en Aceptar.`,
-      type: 'login_2fa'
-    });
   };
 
   const handleNextStepFrom1 = () => {
@@ -344,72 +365,95 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
           </div>
         </div>
 
-        {/* Resumen Técnico del Desembolso y Firma OTP */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-sky-50/60 border border-sky-200 p-4 rounded text-xs">
-          <div>
-            <span className="text-[10px] font-bold uppercase text-sky-800 block">
-              Monto en Proceso de Desembolso
-            </span>
-            <span className="font-mono font-extrabold text-lg text-purple-950">
-              {formatMoney(
-                user.disbursementRequest?.requestedAmount ||
-                  requestedAmount ||
-                  user.creditLimit
-              )}
-            </span>
-            <span className="text-[11px] text-purple-700 block">
-              Plazo:{' '}
-              {user.disbursementRequest?.requestedTermMonths ||
-                requestedTermMonths ||
-                user.loanTermMonths ||
-                12}{' '}
-              meses • Cuota:{' '}
-              {formatMoney(
-                user.disbursementRequest?.estimatedMonthlyInstallment ||
-                  estimatedMonthlyInstallment
-              )}
-            </span>
-          </div>
+        {/* Resumen Técnico del Desembolso y Desglose Fijo de 8 Conceptos */}
+        {(() => {
+          const activeDisbursementBreakdown =
+            user.disbursementRequest?.loanBreakdown ||
+            user.activeLoanBreakdown ||
+            liveBreakdown;
+          return (
+            <div className="space-y-3 bg-sky-50/60 border border-sky-200 p-4 rounded text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-sky-200">
+                <span className="font-extrabold text-sky-950 flex items-center gap-1.5">
+                  <Lock className="w-3.5 h-3.5 text-sky-700" />
+                  <span>
+                    Condiciones Financieras Fijadas (No editables ni borrables mientras el crédito esté activo)
+                  </span>
+                </span>
+                <span className="font-mono font-bold text-emerald-700">
+                  Firma OTP: {user.disbursementRequest?.otpCodeSigned || otpInput || 'VERIFICADO'}
+                </span>
+              </div>
 
-          <div>
-            <span className="text-[10px] font-bold uppercase text-sky-800 block">
-              Cuenta y Fechas Seleccionadas
-            </span>
-            <span className="font-bold text-purple-950 block">
-              {user.disbursementRequest?.bankEntity || bankEntity} (
-              {user.disbursementRequest?.accountType || accountType})
-            </span>
-            <span className="font-mono text-xs text-purple-800 block">
-              N°: {user.disbursementRequest?.accountNumber || accountNumber}
-            </span>
-            <span className="font-mono text-[11px] text-sky-700 font-bold">
-              Corte: {user.nextPaymentDate || `Día ${String(selectedPaymentDay).padStart(2, '0')}`}
-            </span>
-          </div>
-
-          <div>
-            <span className="text-[10px] font-bold uppercase text-sky-800 block">
-              Firma Electrónica y Contacto
-            </span>
-            <span className="font-mono font-bold text-emerald-700 block">
-              Código OTP Firmado:{' '}
-              {user.disbursementRequest?.otpCodeSigned ||
-                otpInput ||
-                'VERIFICADO'}
-            </span>
-            <span className="text-[11px] text-purple-800 block truncate">
-              {user.phone} • {user.email}
-            </span>
-            <span
-              className="font-mono text-[10px] text-slate-500 truncate block"
-              title={user.disbursementRequest?.signatureHash}
-            >
-              Ref API:{' '}
-              {user.disbursementRequest?.bankApiReference ||
-                user.creditTramiteId}
-            </span>
-          </div>
-        </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                <div className="bg-white p-2.5 rounded border border-sky-200">
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">
+                    1. Monto Principal (Desembolsado)
+                  </span>
+                  <strong className="font-mono text-sm text-purple-950">
+                    {formatMoney(activeDisbursementBreakdown.principalAmount)}
+                  </strong>
+                </div>
+                <div className="bg-white p-2.5 rounded border border-sky-200">
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">
+                    2. Interés (Ganancia Empresa)
+                  </span>
+                  <strong className="font-mono text-sm text-purple-800">
+                    {formatMoney(activeDisbursementBreakdown.interestAmount)}
+                  </strong>
+                </div>
+                <div className="bg-white p-2.5 rounded border border-sky-200">
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">
+                    3. Fianza ({activeDisbursementBreakdown.fianzaPercentage}%)
+                  </span>
+                  <strong className="font-mono text-sm text-purple-950">
+                    {formatMoney(activeDisbursementBreakdown.fianzaAmount)}
+                  </strong>
+                </div>
+                <div className="bg-white p-2.5 rounded border border-sky-200">
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">
+                    4. Firma Electrónica
+                  </span>
+                  <strong className="font-mono text-sm text-purple-950">
+                    {formatMoney(activeDisbursementBreakdown.electronicSignatureFee)}
+                  </strong>
+                </div>
+                <div className="bg-white p-2.5 rounded border border-sky-200">
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">
+                    5. Gastos de Cobranza
+                  </span>
+                  <strong className="font-mono text-sm text-purple-950">
+                    {formatMoney(activeDisbursementBreakdown.collectionExpenses)}
+                  </strong>
+                </div>
+                <div className="bg-white p-2.5 rounded border border-sky-200">
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">
+                    6. IVA ({activeDisbursementBreakdown.ivaPercentage}%)
+                  </span>
+                  <strong className="font-mono text-sm text-purple-950">
+                    {formatMoney(activeDisbursementBreakdown.ivaAmount)}
+                  </strong>
+                </div>
+                <div className="bg-white p-2.5 rounded border border-sky-200">
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">
+                    7. Fecha Límite de Pago
+                  </span>
+                  <strong className="font-mono text-xs text-purple-950">
+                    {activeDisbursementBreakdown.paymentDeadline}
+                  </strong>
+                </div>
+                <div className="bg-emerald-50 p-2.5 rounded border border-emerald-300">
+                  <span className="text-[10px] font-extrabold uppercase text-emerald-800 block">
+                    8. Pago Total Fijado
+                  </span>
+                  <strong className="font-mono text-sm font-extrabold text-emerald-700">
+                    {formatMoney(activeDisbursementBreakdown.totalPaymentAmount)}
+                  </strong>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Etapas Completadas y Estado de Espera */}
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 text-xs">
@@ -719,29 +763,69 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
                     ))}
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-purple-200 text-xs">
-                    <div className="bg-white p-3 rounded border border-purple-200">
-                      <span className="text-purple-600 block">
-                        Valor Cuota Mensual:
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-3 border-t border-purple-200 text-xs">
+                    <div className="bg-white p-2.5 rounded border border-purple-200">
+                      <span className="text-[10px] text-purple-600 block">
+                        1. Principal Desembolsado:
                       </span>
-                      <strong className="font-mono text-base text-purple-950">
-                        {formatMoney(estimatedMonthlyInstallment)}
+                      <strong className="font-mono text-sm text-purple-950">
+                        {formatMoney(liveBreakdown.principalAmount)}
                       </strong>
                     </div>
-                    <div className="bg-white p-3 rounded border border-purple-200">
-                      <span className="text-purple-600 block">
-                        Primera Fecha de Pago:
+                    <div className="bg-white p-2.5 rounded border border-purple-200">
+                      <span className="text-[10px] text-purple-600 block">
+                        2. Interés ({liveBreakdown.interestRatePercentage}% EM):
                       </span>
-                      <strong className="font-mono text-base text-purple-950">
+                      <strong className="font-mono text-sm text-purple-950">
+                        {formatMoney(liveBreakdown.interestAmount)}
+                      </strong>
+                    </div>
+                    <div className="bg-white p-2.5 rounded border border-purple-200">
+                      <span className="text-[10px] text-purple-600 block">
+                        3. Fianza ({liveBreakdown.fianzaPercentage}%):
+                      </span>
+                      <strong className="font-mono text-sm text-purple-950">
+                        {formatMoney(liveBreakdown.fianzaAmount)}
+                      </strong>
+                    </div>
+                    <div className="bg-white p-2.5 rounded border border-purple-200">
+                      <span className="text-[10px] text-purple-600 block">
+                        4. Firma Electrónica:
+                      </span>
+                      <strong className="font-mono text-sm text-purple-950">
+                        {formatMoney(liveBreakdown.electronicSignatureFee)}
+                      </strong>
+                    </div>
+                    <div className="bg-white p-2.5 rounded border border-purple-200">
+                      <span className="text-[10px] text-purple-600 block">
+                        5. Gastos de Cobranza:
+                      </span>
+                      <strong className="font-mono text-sm text-purple-950">
+                        {formatMoney(liveBreakdown.collectionExpenses)}
+                      </strong>
+                    </div>
+                    <div className="bg-white p-2.5 rounded border border-purple-200">
+                      <span className="text-[10px] text-purple-600 block">
+                        6. IVA ({liveBreakdown.ivaPercentage}%):
+                      </span>
+                      <strong className="font-mono text-sm text-purple-950">
+                        {formatMoney(liveBreakdown.ivaAmount)}
+                      </strong>
+                    </div>
+                    <div className="bg-white p-2.5 rounded border border-purple-200">
+                      <span className="text-[10px] text-purple-600 block">
+                        7. Fecha Límite de Pago:
+                      </span>
+                      <strong className="font-mono text-xs text-purple-950">
                         {computedFirstPaymentDate}
                       </strong>
                     </div>
-                    <div className="bg-white p-3 rounded border border-purple-200">
-                      <span className="text-purple-600 block">
-                        Fecha Última Cuota:
+                    <div className="bg-purple-100/70 p-2.5 rounded border border-purple-300">
+                      <span className="text-[10px] font-bold text-purple-800 block">
+                        8. Pago Total Fijado:
                       </span>
-                      <strong className="font-mono text-base text-purple-950">
-                        {computedFinalPaymentDate}
+                      <strong className="font-mono text-sm font-extrabold text-purple-950">
+                        {formatMoney(liveBreakdown.totalPaymentAmount)}
                       </strong>
                     </div>
                   </div>
@@ -776,20 +860,36 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
                     />
                     <div className="text-xs sm:text-sm text-purple-950 space-y-1">
                       <div className="font-extrabold">
-                        Aceptación de Términos Financieros y Plan de Pagos
+                        Aceptación de Desglose Financiero Fijo e Inmutable
                       </div>
                       <p className="text-purple-800/90 leading-relaxed">
-                        Acepto solicitar un crédito por valor de{' '}
-                        <strong>{formatMoney(requestedAmount)}</strong> con un
-                        plazo de <strong>{requestedTermMonths} meses</strong>,
-                        cuota mensual estimada de{' '}
+                        Acepto solicitar un crédito con{' '}
                         <strong>
-                          {formatMoney(estimatedMonthlyInstallment)}
-                        </strong>{' '}
-                        pagadera el{' '}
+                          Monto Principal Desembolsado de{' '}
+                          {formatMoney(liveBreakdown.principalAmount)}
+                        </strong>
+                        , Interés de ganancia de la empresa de{' '}
+                        <strong>{formatMoney(liveBreakdown.interestAmount)}</strong>,
+                        Fianza de{' '}
+                        <strong>{formatMoney(liveBreakdown.fianzaAmount)}</strong>,
+                        Firma Electrónica de{' '}
                         <strong>
-                          día {String(selectedPaymentDay).padStart(2, '0')} de
-                          cada mes
+                          {formatMoney(liveBreakdown.electronicSignatureFee)}
+                        </strong>
+                        , Gastos de Cobranza de{' '}
+                        <strong>
+                          {formatMoney(liveBreakdown.collectionExpenses)}
+                        </strong>
+                        , IVA de{' '}
+                        <strong>{formatMoney(liveBreakdown.ivaAmount)}</strong>,
+                        Fecha Límite de Pago{' '}
+                        <strong>{liveBreakdown.paymentDeadline}</strong> y{' '}
+                        <strong>
+                          Pago Total de {formatMoney(liveBreakdown.totalPaymentAmount)}
+                        </strong>
+                        . Comprendo que al crearse este crédito nuevo{' '}
+                        <strong>
+                          SE FIJA SIN PODER EDITAR, BORRAR NI CAMBIAR MIENTRAS ESTÉ ACTIVO
                         </strong>
                         .
                       </p>
@@ -934,39 +1034,70 @@ export const LoanRequestFlow: React.FC<LoanRequestFlowProps> = ({
                   </h2>
                 </div>
 
-                {/* Resumen de lo que se firma */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 bg-purple-50/70 border border-purple-200 p-4 rounded text-xs">
+                {/* Resumen de los 8 elementos que se fijan al firmar */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 bg-purple-50/70 border border-purple-200 p-4 rounded text-xs">
                   <div>
                     <span className="text-[10px] font-bold uppercase text-purple-600 block">
-                      Monto Solicitado
+                      1. Principal Desembolsado
                     </span>
                     <strong className="font-mono text-sm text-purple-950">
-                      {formatMoney(requestedAmount)}
+                      {formatMoney(liveBreakdown.principalAmount)}
                     </strong>
                   </div>
                   <div>
                     <span className="text-[10px] font-bold uppercase text-purple-600 block">
-                      Plazo y Fecha
+                      2. Interés Ganancia
                     </span>
                     <strong className="font-mono text-sm text-purple-950">
-                      {requestedTermMonths} cuotas • Día{' '}
-                      {String(selectedPaymentDay).padStart(2, '0')}
+                      {formatMoney(liveBreakdown.interestAmount)}
                     </strong>
                   </div>
                   <div>
                     <span className="text-[10px] font-bold uppercase text-purple-600 block">
-                      Cuota Mensual
+                      3. Fianza ({liveBreakdown.fianzaPercentage}%)
                     </span>
                     <strong className="font-mono text-sm text-purple-950">
-                      {formatMoney(estimatedMonthlyInstallment)}
+                      {formatMoney(liveBreakdown.fianzaAmount)}
                     </strong>
                   </div>
                   <div>
                     <span className="text-[10px] font-bold uppercase text-purple-600 block">
-                      Teléfono / Correo
+                      4. Firma Electrónica
                     </span>
-                    <strong className="font-mono text-xs text-purple-950 truncate block">
-                      {contactPhone}
+                    <strong className="font-mono text-sm text-purple-950">
+                      {formatMoney(liveBreakdown.electronicSignatureFee)}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-purple-600 block">
+                      5. Gastos de Cobranza
+                    </span>
+                    <strong className="font-mono text-sm text-purple-950">
+                      {formatMoney(liveBreakdown.collectionExpenses)}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-purple-600 block">
+                      6. IVA ({liveBreakdown.ivaPercentage}%)
+                    </span>
+                    <strong className="font-mono text-sm text-purple-950">
+                      {formatMoney(liveBreakdown.ivaAmount)}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-purple-600 block">
+                      7. Fecha Límite Pago
+                    </span>
+                    <strong className="font-mono text-xs text-purple-950">
+                      {liveBreakdown.paymentDeadline}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-extrabold uppercase text-emerald-700 block">
+                      8. Pago Total Fijado
+                    </span>
+                    <strong className="font-mono text-sm font-extrabold text-emerald-700">
+                      {formatMoney(liveBreakdown.totalPaymentAmount)}
                     </strong>
                   </div>
                 </div>

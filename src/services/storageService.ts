@@ -12,7 +12,8 @@ import {
   LegalSignatureRecord,
   LoanGeneralSettings,
   PreviousLoanRecord,
-  ClientPaymentRecord
+  ClientPaymentRecord,
+  LoanFinancialBreakdown
 } from '../types';
 import {
   hashPassword,
@@ -33,11 +34,14 @@ const AUDIT_STORAGE_KEY = 'crediulep_tamper_audit_v2';
 const LOAN_SETTINGS_STORAGE_KEY = 'crediulep_general_loan_settings_v1';
 
 const DEFAULT_LOAN_SETTINGS: LoanGeneralSettings = {
-  taxPercentage: 4.5, // Impuesto / Gravamen sobre crédito (%)
-  monthlyInterestRate: 1.85, // Interés mensual (% E.M.)
+  taxPercentage: 19, // IVA aplicable sobre cargos y servicios (%)
+  monthlyInterestRate: 1.85, // Interés mensual de ganancia de la empresa (% E.M.)
   annualEffectiveRate: 24.6, // Tasa Efectiva Anual (% E.A.)
-  lateFeePercentage: 2.8, // Recargo por mora (%)
+  lateFeePercentage: 2.8, // Recargo por mora / cobranza (%)
   insurancePercentage: 0.45, // Seguro de vida deudor (%)
+  fianzaPercentage: 6.5, // Fianza / garantía sobre monto desembolsado (%)
+  electronicSignatureFee: 28500, // Costo de firma electrónica certificada OTP (COP)
+  collectionExpensesDefault: 0, // Gastos de cobranza al originar (COP)
   adminStudyFee: 45000, // Estudio y administración (COP)
   minLoanAmount: 1000000, // Monto mínimo (COP)
   maxLoanAmount: 50000000, // Monto máximo (COP)
@@ -46,6 +50,7 @@ const DEFAULT_LOAN_SETTINGS: LoanGeneralSettings = {
   gracePeriodDays: 5, // Días de gracia
   allowCustomInstallments: true,
   earlyPaymentPenaltyPercentage: 0,
+  adPosterUrl: '',
   updatedAt: '2026-10-19T08:00:00Z',
   updatedBy: 'ADMINIULEP'
 };
@@ -56,6 +61,259 @@ let isDefaultDataInitialized = false;
 let defaultDataInitPromise: Promise<void> | null = null;
 
 export class StorageService {
+  /**
+   * Determina si el crédito actual de un cliente está ACTIVO y por tanto FIJADO
+   * (sin poder editar, borrar ni cambiar mientras esté activo)
+   */
+  static isCreditActiveAndLocked(user: User): boolean {
+    if (user.role === 'ADMIN' || user.role === 'WORKER') return false;
+    return (
+      user.creditStatus === 'ASIGNADO' &&
+      user.availableBalance > 0 &&
+      user.paymentStatus !== 'PAZ_Y_SALVO' &&
+      user.paymentStatus !== 'SIN_ACEPTAR'
+    );
+  }
+
+  /**
+   * Calcula y estructura todos los componentes obligatorios del crédito de una persona:
+   * - Monto principal (crédito desembolsado)
+   * - Interés (intereses de ganancia de la empresa)
+   * - Fianza
+   * - Firma electrónica
+   * - Gastos de cobranza
+   * - IVA
+   * - Fecha límite de pago
+   * - Pago total
+   */
+  static buildFixedLoanBreakdown(params: {
+    tramiteId?: string;
+    principalAmount: number;
+    termMonths?: number;
+    interestRatePercentage?: number;
+    interestAmount?: number;
+    fianzaPercentage?: number;
+    fianzaAmount?: number;
+    electronicSignatureFee?: number;
+    electronicSignatureCode?: string;
+    collectionExpenses?: number;
+    ivaPercentage?: number;
+    ivaAmount?: number;
+    paymentDeadline?: string;
+    totalPaymentAmountOverride?: number;
+    lockedAt?: string;
+    isLockedWhileActive?: boolean;
+  }): LoanFinancialBreakdown {
+    const settings = this.getLoanSettings();
+    const resolvedTramiteId = (params.tramiteId || 'TRM-100000').trim();
+    const principalAmount = Math.max(0, Math.round(Number(params.principalAmount) || 0));
+    const termMonths = Math.max(1, Math.round(Number(params.termMonths || settings.defaultTermMonths || 12)));
+    const interestRatePercentage = Number(
+      params.interestRatePercentage ?? settings.monthlyInterestRate ?? 1.85
+    );
+    const fianzaPercentage = Number(
+      params.fianzaPercentage ?? settings.fianzaPercentage ?? 6.5
+    );
+    const ivaPercentage = Number(
+      params.ivaPercentage ?? settings.taxPercentage ?? 19
+    );
+
+    const interestAmount =
+      params.interestAmount !== undefined
+        ? Math.max(0, Math.round(Number(params.interestAmount)))
+        : Math.round(principalAmount * (interestRatePercentage / 100) * termMonths);
+
+    const fianzaAmount =
+      params.fianzaAmount !== undefined
+        ? Math.max(0, Math.round(Number(params.fianzaAmount)))
+        : Math.round(principalAmount * (fianzaPercentage / 100));
+
+    const electronicSignatureFee =
+      params.electronicSignatureFee !== undefined
+        ? Math.max(0, Math.round(Number(params.electronicSignatureFee)))
+        : Math.round(Number(settings.electronicSignatureFee ?? 28500));
+
+    const collectionExpenses =
+      params.collectionExpenses !== undefined
+        ? Math.max(0, Math.round(Number(params.collectionExpenses)))
+        : Math.round(Number(settings.collectionExpensesDefault ?? 0));
+
+    const ivaAmount =
+      params.ivaAmount !== undefined
+        ? Math.max(0, Math.round(Number(params.ivaAmount)))
+        : Math.round(
+            (fianzaAmount + electronicSignatureFee + collectionExpenses) *
+              (ivaPercentage / 100)
+          );
+
+    const computedSum =
+      principalAmount +
+      interestAmount +
+      fianzaAmount +
+      electronicSignatureFee +
+      collectionExpenses +
+      ivaAmount;
+
+    const totalPaymentAmount =
+      params.totalPaymentAmountOverride !== undefined &&
+      params.totalPaymentAmountOverride > 0
+        ? Math.round(params.totalPaymentAmountOverride)
+        : computedSum;
+
+    const defaultDeadline = new Date(
+      Date.now() + 30 * 24 * 60 * 60 * 1000
+    )
+      .toISOString()
+      .split('T')[0];
+
+    const paymentDeadline =
+      (params.paymentDeadline || '').trim() || defaultDeadline;
+
+    const electronicSignatureCode =
+      (params.electronicSignatureCode || '').trim() ||
+      `FIRMA-OTP-${resolvedTramiteId.replace(/[^A-Z0-9]/gi, '').slice(-6)}`;
+
+    const monthlyInstallmentAmount = Math.round(
+      totalPaymentAmount / Math.max(1, termMonths)
+    );
+
+    return {
+      tramiteId: resolvedTramiteId,
+      principalAmount,
+      interestAmount,
+      interestRatePercentage,
+      fianzaAmount,
+      fianzaPercentage,
+      electronicSignatureFee,
+      electronicSignatureCode,
+      collectionExpenses,
+      ivaAmount,
+      ivaPercentage,
+      paymentDeadline,
+      totalPaymentAmount,
+      termMonths,
+      monthlyInstallmentAmount,
+      lockedAt: params.lockedAt || new Date().toISOString(),
+      isLockedWhileActive:
+        params.isLockedWhileActive !== undefined
+          ? params.isLockedWhileActive
+          : true
+    };
+  }
+
+  /**
+   * Garantiza que un usuario cliente tenga su activeLoanBreakdown y previousLoans completos
+   */
+  private static normalizeClientLoanBreakdown(user: User): User {
+    if (user.role === 'ADMIN' || user.role === 'WORKER') return user;
+
+    const isActive = this.isCreditActiveAndLocked(user);
+    const termMonths = user.loanTermMonths || 12;
+
+    let activeBreakdown = user.activeLoanBreakdown;
+    if (!activeBreakdown) {
+      // Si el usuario tiene un crédito asignado (ej. semilla $18.500.000 de pago total o principal),
+      // estructuramos su desglose exacto para que la suma cuadre con el Pago Total del crédito
+      const targetTotal =
+        user.creditLimit > 0
+          ? Math.max(user.creditLimit, user.availableBalance)
+          : 12000000;
+      const principal = Math.round(targetTotal / 1.305 / 10000) * 10000;
+      const fianza = Math.round(principal * 0.065);
+      const firma = 28500;
+      const cobranza =
+        user.paymentStatus === 'EN_MORA' || (user.daysOverdue || 0) > 0
+          ? Math.round(principal * 0.028)
+          : 0;
+      const iva = Math.round((fianza + firma + cobranza) * 0.19);
+      const interest = Math.max(
+        0,
+        targetTotal - (principal + fianza + firma + cobranza + iva)
+      );
+
+      activeBreakdown = this.buildFixedLoanBreakdown({
+        tramiteId: user.creditTramiteId || 'TRM-100000',
+        principalAmount: principal,
+        termMonths,
+        interestRatePercentage: user.interestRateApplied ?? 1.85,
+        interestAmount: interest,
+        fianzaPercentage: 6.5,
+        fianzaAmount: fianza,
+        electronicSignatureFee: firma,
+        electronicSignatureCode: user.legalSignature?.otpCode
+          ? `OTP-${user.legalSignature.otpCode} (${user.legalSignature.signatureId})`
+          : `FIRMA-OTP-${user.creditTramiteId}`,
+        collectionExpenses: cobranza,
+        ivaPercentage: 19,
+        ivaAmount: iva,
+        paymentDeadline: user.nextPaymentDate || '2026-11-16',
+        totalPaymentAmountOverride: targetTotal,
+        lockedAt: user.creditAssignedDate || user.createdAt || new Date().toISOString(),
+        isLockedWhileActive: isActive
+      });
+    } else {
+      activeBreakdown = {
+        ...activeBreakdown,
+        isLockedWhileActive: isActive
+      };
+    }
+
+    const normalizedPreviousLoans = (user.previousLoans || []).map(prev => {
+      if (
+        prev.principalAmount !== undefined &&
+        prev.interestAmount !== undefined &&
+        prev.fianzaAmount !== undefined &&
+        prev.electronicSignatureFee !== undefined &&
+        prev.collectionExpenses !== undefined &&
+        prev.ivaAmount !== undefined &&
+        prev.totalPaymentAmount !== undefined
+      ) {
+        return prev;
+      }
+      const principal = prev.amountGranted || 5000000;
+      const fianza = Math.round(principal * 0.065);
+      const firma = 28500;
+      const cobranza =
+        prev.paymentBehavior === 'CON_MORA_SUPERADA'
+          ? Math.round(principal * 0.028)
+          : 0;
+      const iva = Math.round((fianza + firma + cobranza) * 0.19);
+      const totalPaid =
+        prev.totalPaid && prev.totalPaid > principal
+          ? prev.totalPaid
+          : principal +
+            Math.round(principal * ((prev.interestRateApplied || 1.85) / 100) * (prev.termMonths || 12)) +
+            fianza +
+            firma +
+            cobranza +
+            iva;
+      const interest = Math.max(
+        0,
+        totalPaid - (principal + fianza + firma + cobranza + iva)
+      );
+
+      return {
+        ...prev,
+        principalAmount: principal,
+        interestAmount: interest,
+        fianzaAmount: fianza,
+        electronicSignatureFee: firma,
+        electronicSignatureCode: `FIRMA-OTP-${prev.tramiteId}`,
+        collectionExpenses: cobranza,
+        ivaAmount: iva,
+        paymentDeadline: prev.closedDate || prev.startDate,
+        totalPaymentAmount: totalPaid,
+        totalPaid
+      };
+    });
+
+    return {
+      ...user,
+      activeLoanBreakdown: activeBreakdown,
+      previousLoans: normalizedPreviousLoans
+    };
+  }
+
   /**
    * Obtiene los Datos Generales de Préstamos desde la bóveda en memoria sincronizada con almacenamiento cifrado AES-256-GCM
    */
@@ -84,7 +342,7 @@ export class StorageService {
       'GENERAL_LOAN_SETTINGS_UPDATED',
       'usr-admin-master',
       'ADMINIULEP',
-      `Parámetros generales de préstamos actualizados por ${adminName}: Impuesto=${updated.taxPercentage}%, Interés Mensual=${updated.monthlyInterestRate}%, Mora=${updated.lateFeePercentage}%, Seguro=${updated.insurancePercentage}%, Estudio=$${updated.adminStudyFee.toLocaleString('es-CO')}.`
+      `Parámetros generales de préstamos actualizados por ${adminName}: IVA=${updated.taxPercentage}%, Interés Mensual=${updated.monthlyInterestRate}%, Fianza=${updated.fianzaPercentage ?? 6.5}%, Firma Electrónica=$${(updated.electronicSignatureFee ?? 28500).toLocaleString('es-CO')}, Mora=${updated.lateFeePercentage}%.`
     );
 
     return {
@@ -106,321 +364,389 @@ export class StorageService {
         const storedLoanSettings = await getEncryptedStorageItem<LoanGeneralSettings>(
           LOAN_SETTINGS_STORAGE_KEY
         );
-    if (storedLoanSettings) {
-      memoryLoanSettingsCache = { ...DEFAULT_LOAN_SETTINGS, ...storedLoanSettings };
-    } else {
-      memoryLoanSettingsCache = { ...DEFAULT_LOAN_SETTINGS };
-      await setEncryptedStorageItem(LOAN_SETTINGS_STORAGE_KEY, memoryLoanSettingsCache);
-    }
-
-    const decryptedUsers = await getEncryptedStorageItem<User[]>(USERS_STORAGE_KEY);
-    let users: User[] = Array.isArray(decryptedUsers) ? decryptedUsers : [];
-
-    // 1. Garantizar que el Administrador Principal (ADMINIULEP) siempre exista
-    const adminCedula = 'ADMINIULEP';
-    const adminExists = users.some(u => u.cedula.toUpperCase() === adminCedula);
-
-    if (!adminExists) {
-      const adminPassHash = await hashPassword('ADMINIULEP', adminCedula);
-      const adminUserBase: Omit<User, 'integrityChecksum'> = {
-        id: 'usr-admin-master',
-        cedula: adminCedula,
-        fullName: 'Administrador General ULEP',
-        email: 'admin@crediulep.com',
-        phone: '+57 300 999 8888',
-        passwordHash: adminPassHash,
-        role: 'ADMIN',
-        workerPermissions: [
-          'CREAR_USUARIOS',
-          'APROBAR_CREDITOS',
-          'RECHAZAR_CREDITOS',
-          'VER_AUDITORIA',
-          'CONFIGURAR_SISTEMA'
-        ],
-        isActive: true,
-        createdAt: '2026-10-15T08:00:00Z',
-        twoFactorEnabled: true,
-        creditStatus: 'ASIGNADO',
-        availableBalance: 0,
-        creditLimit: 0,
-        creditTramiteId: 'ADM-001',
-        acceptedPrivacyPolicy: true,
-        acceptedPrivacyDate: '2026-10-15T08:00:00Z',
-        failedLoginAttempts: 0
-      };
-      const adminChecksum = await calculateUserIntegrityChecksum(adminUserBase);
-      users.unshift({ ...adminUserBase, integrityChecksum: adminChecksum });
-    }
-
-    // 2. Semillas de Clientes de Demostración (Al Día, En Mora y Sin Aceptar)
-    const valPreviousLoans: PreviousLoanRecord[] = [
-      {
-        id: 'prev-val-01',
-        tramiteId: 'TRM-410290',
-        amountGranted: 8000000,
-        totalPaid: 8960000,
-        termMonths: 12,
-        taxPercentageApplied: 4.5,
-        interestRateApplied: 1.85,
-        startDate: '2024-06-10',
-        closedDate: '2025-06-08',
-        finalStatus: 'PAZ_Y_SALVO',
-        paymentBehavior: 'EXCELENTE'
-      },
-      {
-        id: 'prev-val-02',
-        tramiteId: 'TRM-652811',
-        amountGranted: 12500000,
-        totalPaid: 14125000,
-        termMonths: 12,
-        taxPercentageApplied: 4.5,
-        interestRateApplied: 1.85,
-        startDate: '2025-07-15',
-        closedDate: '2026-07-12',
-        finalStatus: 'PAZ_Y_SALVO',
-        paymentBehavior: 'EXCELENTE'
-      }
-    ];
-
-    // 2.1 Cliente con Crédito AL DÍA
-    const valIndex = users.findIndex(u => u.cedula === '1020304050');
-    if (valIndex === -1) {
-      const cedula1 = '1020304050';
-      const passHash1 = await hashPassword('Password123!', cedula1);
-      const user1Base: Omit<User, 'integrityChecksum'> = {
-        id: 'usr-val-001',
-        cedula: cedula1,
-        fullName: 'Valentina Ríos Gómez',
-        email: 'v.rios@seguro.com',
-        phone: '+57 312 458 9012',
-        passwordHash: passHash1,
-        role: 'CLIENT',
-        isActive: true,
-        createdAt: '2026-10-16T10:00:00Z',
-        twoFactorEnabled: true,
-        creditStatus: 'ASIGNADO',
-        availableBalance: 18500000,
-        creditLimit: 18500000,
-        creditAssignedDate: '2026-10-16',
-        creditTramiteId: 'TRM-884210',
-        paymentStatus: 'AL_DIA',
-        daysOverdue: 0,
-        loanTermMonths: 12,
-        customInstallmentAmount: 1541667,
-        nextPaymentDate: '2026-11-16',
-        taxPercentageApplied: 4.5,
-        interestRateApplied: 1.85,
-        previousLoans: valPreviousLoans,
-        acceptedPrivacyPolicy: true,
-        acceptedPrivacyDate: '2026-10-16T10:00:00Z',
-        failedLoginAttempts: 0,
-        legalSignature: {
-          signatureId: 'SIG-VAL-88210',
-          phoneVerified: '+57 312 458 9012',
-          otpCode: '849201',
-          signedAt: '2026-10-16T10:02:15Z',
-          ipAddress: '190.25.144.82',
-          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/129.0.0.0',
-          platform: 'Win32 / Desktop',
-          screenResolution: '1920x1080',
-          language: 'es-CO',
-          signatureHash: 'a7c9f82e1d044bb78921e56cf7891234abcd5678ef0123456789abcdef012345',
-          firestoreSynced: true,
-          firestoreDocId: 'firestore_vault_val_88210',
-          acceptedPolicies: {
-            termsAndConditions: true,
-            privacyPolicy: true,
-            financialDataConsent: true,
-            otpElectronicSignatureAgreement: true,
-            version: 'v2026.1 - Políticas de Protección y Contrato Financiero',
-            acceptedAt: '2026-10-16T10:02:15Z'
-          }
+        if (storedLoanSettings) {
+          memoryLoanSettingsCache = { ...DEFAULT_LOAN_SETTINGS, ...storedLoanSettings };
+        } else {
+          memoryLoanSettingsCache = { ...DEFAULT_LOAN_SETTINGS };
+          await setEncryptedStorageItem(LOAN_SETTINGS_STORAGE_KEY, memoryLoanSettingsCache);
         }
-      };
-      const checksum1 = await calculateUserIntegrityChecksum(user1Base);
-      users.push({ ...user1Base, integrityChecksum: checksum1 });
-    } else {
-      if (!users[valIndex].paymentStatus) {
-        users[valIndex].paymentStatus = 'AL_DIA';
-        users[valIndex].daysOverdue = 0;
-        users[valIndex].loanTermMonths = users[valIndex].loanTermMonths || 12;
-        users[valIndex].nextPaymentDate = users[valIndex].nextPaymentDate || '2026-11-16';
-      }
-      if (!users[valIndex].previousLoans) {
-        users[valIndex].previousLoans = valPreviousLoans;
-      }
-      if (users[valIndex].taxPercentageApplied === undefined) {
-        users[valIndex].taxPercentageApplied = 4.5;
-        users[valIndex].interestRateApplied = 1.85;
-      }
-    }
 
-    // 2.2 Cliente con Crédito EN MORA
-    const moraPreviousLoans: PreviousLoanRecord[] = [
-      {
-        id: 'prev-mor-01',
-        tramiteId: 'TRM-319402',
-        amountGranted: 6500000,
-        totalPaid: 7312000,
-        termMonths: 6,
-        taxPercentageApplied: 4.5,
-        interestRateApplied: 1.85,
-        startDate: '2025-11-05',
-        closedDate: '2026-05-05',
-        finalStatus: 'PAZ_Y_SALVO',
-        paymentBehavior: 'PUNTUAL'
-      }
-    ];
-    const moraIndex = users.findIndex(u => u.cedula === '1030405060');
-    if (moraIndex === -1) {
-      const cedulaMora = '1030405060';
-      const passHashMora = await hashPassword('Password123!', cedulaMora);
-      const userMoraBase: Omit<User, 'integrityChecksum'> = {
-        id: 'usr-mora-003',
-        cedula: cedulaMora,
-        fullName: 'Andrés Felipe Morales',
-        email: 'a.morales@seguro.com',
-        phone: '+57 315 880 3344',
-        passwordHash: passHashMora,
-        role: 'CLIENT',
-        isActive: true,
-        createdAt: '2026-08-10T09:15:00Z',
-        twoFactorEnabled: true,
-        creditStatus: 'ASIGNADO',
-        availableBalance: 11200000,
-        creditLimit: 12000000,
-        creditAssignedDate: '2026-08-10',
-        creditTramiteId: 'TRM-772190',
-        paymentStatus: 'EN_MORA',
-        daysOverdue: 45,
-        loanTermMonths: 12,
-        customInstallmentAmount: 1000000,
-        nextPaymentDate: '2026-09-04',
-        taxPercentageApplied: 4.5,
-        interestRateApplied: 1.85,
-        previousLoans: moraPreviousLoans,
-        acceptedPrivacyPolicy: true,
-        acceptedPrivacyDate: '2026-08-10T09:15:00Z',
-        failedLoginAttempts: 0,
-        legalSignature: {
-          signatureId: 'SIG-MOR-77219',
-          phoneVerified: '+57 315 880 3344',
-          otpCode: '514892',
-          signedAt: '2026-08-10T09:16:30Z',
-          ipAddress: '181.50.112.40',
-          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/129.0.0.0',
-          platform: 'Win32 / Desktop',
-          screenResolution: '1920x1080',
-          language: 'es-CO',
-          signatureHash: 'b4d2c99182fa1c149afbf4c8996fb92427ae41e4649b934ca495991b7852a111',
-          firestoreSynced: true,
-          firestoreDocId: 'firestore_vault_mor_77219',
-          acceptedPolicies: {
-            termsAndConditions: true,
-            privacyPolicy: true,
-            financialDataConsent: true,
-            otpElectronicSignatureAgreement: true,
-            version: 'v2026.1 - Políticas de Protección y Contrato Financiero',
-            acceptedAt: '2026-08-10T09:16:30Z'
-          }
+        const decryptedUsers = await getEncryptedStorageItem<User[]>(USERS_STORAGE_KEY);
+        let users: User[] = Array.isArray(decryptedUsers) ? decryptedUsers : [];
+
+        // 1. Garantizar que el Administrador Principal (ADMINIULEP) siempre exista
+        const adminCedula = 'ADMINIULEP';
+        const adminExists = users.some(u => u.cedula.toUpperCase() === adminCedula);
+
+        if (!adminExists) {
+          const adminPassHash = await hashPassword('ADMINIULEP', adminCedula);
+          const adminUserBase: Omit<User, 'integrityChecksum'> = {
+            id: 'usr-admin-master',
+            cedula: adminCedula,
+            fullName: 'Administrador General ULEP',
+            email: 'admin@crediulep.com',
+            phone: '+57 300 999 8888',
+            passwordHash: adminPassHash,
+            role: 'ADMIN',
+            workerPermissions: [
+              'CREAR_USUARIOS',
+              'APROBAR_CREDITOS',
+              'RECHAZAR_CREDITOS',
+              'VER_AUDITORIA',
+              'CONFIGURAR_SISTEMA'
+            ],
+            isActive: true,
+            createdAt: '2026-10-15T08:00:00Z',
+            twoFactorEnabled: true,
+            creditStatus: 'ASIGNADO',
+            availableBalance: 0,
+            creditLimit: 0,
+            creditTramiteId: 'ADM-001',
+            acceptedPrivacyPolicy: true,
+            acceptedPrivacyDate: '2026-10-15T08:00:00Z',
+            failedLoginAttempts: 0
+          };
+          const adminChecksum = await calculateUserIntegrityChecksum(adminUserBase);
+          users.unshift({ ...adminUserBase, integrityChecksum: adminChecksum });
         }
-      };
-      const checksumMora = await calculateUserIntegrityChecksum(userMoraBase);
-      users.push({ ...userMoraBase, integrityChecksum: checksumMora });
-    } else if (!users[moraIndex].previousLoans) {
-      users[moraIndex].previousLoans = moraPreviousLoans;
-    }
 
-    // 2.3 Cliente con Crédito SIN ACEPTAR (PENDIENTE)
-    const matIndex = users.findIndex(u => u.cedula === '9876543210');
-    if (matIndex === -1) {
-      const cedula2 = '9876543210';
-      const passHash2 = await hashPassword('Password123!', cedula2);
-      const user2Base: Omit<User, 'integrityChecksum'> = {
-        id: 'usr-mat-002',
-        cedula: cedula2,
-        fullName: 'Mateo Restrepo Cárdenas',
-        email: 'm.restrepo@seguro.com',
-        phone: '+57 301 987 6543',
-        passwordHash: passHash2,
-        role: 'CLIENT',
-        isActive: true,
-        createdAt: '2026-10-18T14:30:00Z',
-        twoFactorEnabled: true,
-        creditStatus: 'PENDIENTE',
-        availableBalance: 0,
-        creditLimit: 12000000,
-        creditEstimatedDate: '2026-10-24',
-        creditTramiteId: 'TRM-993104',
-        paymentStatus: 'SIN_ACEPTAR',
-        daysOverdue: 0,
-        loanTermMonths: 12,
-        customInstallmentAmount: 1000000,
-        acceptedPrivacyPolicy: true,
-        acceptedPrivacyDate: '2026-10-18T14:30:00Z',
-        failedLoginAttempts: 0,
-        legalSignature: {
-          signatureId: 'SIG-MAT-99104',
-          phoneVerified: '+57 301 987 6543',
-          otpCode: '621908',
-          signedAt: '2026-10-18T14:31:40Z',
-          ipAddress: '186.84.90.115',
-          userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15',
-          platform: 'iPhone / Mobile Safari',
-          screenResolution: '393x852',
-          language: 'es-ES',
-          signatureHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-          firestoreSynced: true,
-          firestoreDocId: 'firestore_vault_mat_99104',
-          acceptedPolicies: {
-            termsAndConditions: true,
-            privacyPolicy: true,
-            financialDataConsent: true,
-            otpElectronicSignatureAgreement: true,
-            version: 'v2026.1 - Políticas de Protección y Contrato Financiero',
-            acceptedAt: '2026-10-18T14:31:40Z'
+        // 2. Semillas de Clientes de Demostración (Al Día, En Mora y Sin Aceptar)
+        const valPreviousLoans: PreviousLoanRecord[] = [
+          {
+            id: 'prev-val-01',
+            tramiteId: 'TRM-410290',
+            amountGranted: 8000000,
+            totalPaid: 10421915,
+            termMonths: 12,
+            taxPercentageApplied: 19,
+            interestRateApplied: 1.85,
+            startDate: '2024-06-10',
+            closedDate: '2025-06-08',
+            finalStatus: 'PAZ_Y_SALVO',
+            paymentBehavior: 'EXCELENTE',
+            principalAmount: 8000000,
+            interestAmount: 1776000,
+            fianzaAmount: 520000,
+            electronicSignatureFee: 28500,
+            electronicSignatureCode: 'OTP-410290 (SIG-VAL-2024)',
+            collectionExpenses: 0,
+            ivaAmount: 97415,
+            paymentDeadline: '2025-06-08',
+            totalPaymentAmount: 10421915
+          },
+          {
+            id: 'prev-val-02',
+            tramiteId: 'TRM-652811',
+            amountGranted: 12500000,
+            totalPaid: 16278040,
+            termMonths: 12,
+            taxPercentageApplied: 19,
+            interestRateApplied: 1.85,
+            startDate: '2025-07-15',
+            closedDate: '2026-07-12',
+            finalStatus: 'PAZ_Y_SALVO',
+            paymentBehavior: 'EXCELENTE',
+            principalAmount: 12500000,
+            interestAmount: 2775000,
+            fianzaAmount: 812500,
+            electronicSignatureFee: 28500,
+            electronicSignatureCode: 'OTP-652811 (SIG-VAL-2025)',
+            collectionExpenses: 0,
+            ivaAmount: 162040,
+            paymentDeadline: '2026-07-12',
+            totalPaymentAmount: 16278040
           }
+        ];
+
+        // 2.1 Cliente con Crédito AL DÍA
+        const valIndex = users.findIndex(u => u.cedula === '1020304050');
+        if (valIndex === -1) {
+          const cedula1 = '1020304050';
+          const passHash1 = await hashPassword('Password123!', cedula1);
+          const valBreakdown = this.buildFixedLoanBreakdown({
+            tramiteId: 'TRM-884210',
+            principalAmount: 14180000,
+            termMonths: 12,
+            interestRatePercentage: 1.85,
+            interestAmount: 3189624,
+            fianzaPercentage: 6.5,
+            fianzaAmount: 921700,
+            electronicSignatureFee: 28500,
+            electronicSignatureCode: 'OTP-849201 (SIG-VAL-88210)',
+            collectionExpenses: 0,
+            ivaPercentage: 19,
+            ivaAmount: 180176,
+            paymentDeadline: '2026-11-16',
+            totalPaymentAmountOverride: 18500000,
+            lockedAt: '2026-10-16T10:02:15Z',
+            isLockedWhileActive: true
+          });
+          const user1Base: Omit<User, 'integrityChecksum'> = {
+            id: 'usr-val-001',
+            cedula: cedula1,
+            fullName: 'Valentina Ríos Gómez',
+            email: 'v.rios@seguro.com',
+            phone: '+57 312 458 9012',
+            passwordHash: passHash1,
+            role: 'CLIENT',
+            isActive: true,
+            createdAt: '2026-10-16T10:00:00Z',
+            twoFactorEnabled: true,
+            creditStatus: 'ASIGNADO',
+            availableBalance: 18500000,
+            creditLimit: 18500000,
+            creditAssignedDate: '2026-10-16',
+            creditTramiteId: 'TRM-884210',
+            paymentStatus: 'AL_DIA',
+            daysOverdue: 0,
+            loanTermMonths: 12,
+            customInstallmentAmount: 1541667,
+            nextPaymentDate: '2026-11-16',
+            taxPercentageApplied: 19,
+            interestRateApplied: 1.85,
+            activeLoanBreakdown: valBreakdown,
+            previousLoans: valPreviousLoans,
+            acceptedPrivacyPolicy: true,
+            acceptedPrivacyDate: '2026-10-16T10:00:00Z',
+            failedLoginAttempts: 0,
+            legalSignature: {
+              signatureId: 'SIG-VAL-88210',
+              phoneVerified: '+57 312 458 9012',
+              otpCode: '849201',
+              signedAt: '2026-10-16T10:02:15Z',
+              ipAddress: '190.25.144.82',
+              userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/129.0.0.0',
+              platform: 'Win32 / Desktop',
+              screenResolution: '1920x1080',
+              language: 'es-CO',
+              signatureHash: 'a7c9f82e1d044bb78921e56cf7891234abcd5678ef0123456789abcdef012345',
+              firestoreSynced: true,
+              firestoreDocId: 'firestore_vault_val_88210',
+              acceptedPolicies: {
+                termsAndConditions: true,
+                privacyPolicy: true,
+                financialDataConsent: true,
+                otpElectronicSignatureAgreement: true,
+                version: 'v2026.1 - Políticas de Protección y Contrato Financiero',
+                acceptedAt: '2026-10-16T10:02:15Z'
+              }
+            }
+          };
+          const checksum1 = await calculateUserIntegrityChecksum(user1Base);
+          users.push({ ...user1Base, integrityChecksum: checksum1 });
         }
-      };
-      const checksum2 = await calculateUserIntegrityChecksum(user2Base);
-      users.push({ ...user2Base, integrityChecksum: checksum2 });
-    } else if (!users[matIndex].paymentStatus) {
-      users[matIndex].paymentStatus = 'SIN_ACEPTAR';
-      users[matIndex].daysOverdue = 0;
-      users[matIndex].loanTermMonths = users[matIndex].loanTermMonths || 12;
-    }
 
-    // 3. Semilla de Trabajador / Operador
-    const workerExists = users.some(u => u.cedula === 'OP-2001');
-    if (!workerExists) {
-      const workerCedula = 'OP-2001';
-      const workerPass = await hashPassword('Worker123!', workerCedula);
-      const workerBase: Omit<User, 'integrityChecksum'> = {
-        id: 'usr-wrk-001',
-        cedula: workerCedula,
-        fullName: 'Carlos Andrés Méndez',
-        email: 'c.mendez@crediulep.com',
-        phone: '+57 310 555 7788',
-        passwordHash: workerPass,
-        role: 'WORKER',
-        workerPermissions: ['CREAR_USUARIOS', 'APROBAR_CREDITOS', 'RECHAZAR_CREDITOS', 'CONFIGURAR_SISTEMA'],
-        isActive: true,
-        createdAt: '2026-10-17T09:00:00Z',
-        twoFactorEnabled: true,
-        creditStatus: 'ASIGNADO',
-        availableBalance: 0,
-        creditLimit: 0,
-        creditTramiteId: 'OP-01',
-        acceptedPrivacyPolicy: true,
-        acceptedPrivacyDate: '2026-10-17T09:00:00Z',
-        failedLoginAttempts: 0
-      };
-      const checksumWorker = await calculateUserIntegrityChecksum(workerBase);
-      users.push({ ...workerBase, integrityChecksum: checksumWorker });
-    }
+        // 2.2 Cliente con Crédito EN MORA
+        const moraPreviousLoans: PreviousLoanRecord[] = [
+          {
+            id: 'prev-mor-01',
+            tramiteId: 'TRM-319402',
+            amountGranted: 6500000,
+            totalPaid: 7746365,
+            termMonths: 6,
+            taxPercentageApplied: 19,
+            interestRateApplied: 1.85,
+            startDate: '2025-11-05',
+            closedDate: '2026-05-05',
+            finalStatus: 'PAZ_Y_SALVO',
+            paymentBehavior: 'PUNTUAL',
+            principalAmount: 6500000,
+            interestAmount: 721500,
+            fianzaAmount: 422500,
+            electronicSignatureFee: 28500,
+            electronicSignatureCode: 'OTP-319402 (SIG-MOR-2025)',
+            collectionExpenses: 0,
+            ivaAmount: 73865,
+            paymentDeadline: '2026-05-05',
+            totalPaymentAmount: 7746365
+          }
+        ];
+        const moraIndex = users.findIndex(u => u.cedula === '1030405060');
+        if (moraIndex === -1) {
+          const cedulaMora = '1030405060';
+          const passHashMora = await hashPassword('Password123!', cedulaMora);
+          const moraBreakdown = this.buildFixedLoanBreakdown({
+            tramiteId: 'TRM-772190',
+            principalAmount: 9000000,
+            termMonths: 12,
+            interestRatePercentage: 1.85,
+            interestAmount: 1978480,
+            fianzaPercentage: 6.5,
+            fianzaAmount: 585000,
+            electronicSignatureFee: 28500,
+            electronicSignatureCode: 'OTP-514892 (SIG-MOR-77219)',
+            collectionExpenses: 252000,
+            ivaPercentage: 19,
+            ivaAmount: 156020,
+            paymentDeadline: '2026-09-04',
+            totalPaymentAmountOverride: 12000000,
+            lockedAt: '2026-08-10T09:16:30Z',
+            isLockedWhileActive: true
+          });
+          const userMoraBase: Omit<User, 'integrityChecksum'> = {
+            id: 'usr-mora-003',
+            cedula: cedulaMora,
+            fullName: 'Andrés Felipe Morales',
+            email: 'a.morales@seguro.com',
+            phone: '+57 315 880 3344',
+            passwordHash: passHashMora,
+            role: 'CLIENT',
+            isActive: true,
+            createdAt: '2026-08-10T09:15:00Z',
+            twoFactorEnabled: true,
+            creditStatus: 'ASIGNADO',
+            availableBalance: 11200000,
+            creditLimit: 12000000,
+            creditAssignedDate: '2026-08-10',
+            creditTramiteId: 'TRM-772190',
+            paymentStatus: 'EN_MORA',
+            daysOverdue: 45,
+            loanTermMonths: 12,
+            customInstallmentAmount: 1000000,
+            nextPaymentDate: '2026-09-04',
+            taxPercentageApplied: 19,
+            interestRateApplied: 1.85,
+            activeLoanBreakdown: moraBreakdown,
+            previousLoans: moraPreviousLoans,
+            acceptedPrivacyPolicy: true,
+            acceptedPrivacyDate: '2026-08-10T09:15:00Z',
+            failedLoginAttempts: 0,
+            legalSignature: {
+              signatureId: 'SIG-MOR-77219',
+              phoneVerified: '+57 315 880 3344',
+              otpCode: '514892',
+              signedAt: '2026-08-10T09:16:30Z',
+              ipAddress: '181.50.112.40',
+              userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/129.0.0.0',
+              platform: 'Win32 / Desktop',
+              screenResolution: '1920x1080',
+              language: 'es-CO',
+              signatureHash: 'b4d2c99182fa1c149afbf4c8996fb92427ae41e4649b934ca495991b7852a111',
+              firestoreSynced: true,
+              firestoreDocId: 'firestore_vault_mor_77219',
+              acceptedPolicies: {
+                termsAndConditions: true,
+                privacyPolicy: true,
+                financialDataConsent: true,
+                otpElectronicSignatureAgreement: true,
+                version: 'v2026.1 - Políticas de Protección y Contrato Financiero',
+                acceptedAt: '2026-08-10T09:16:30Z'
+              }
+            }
+          };
+          const checksumMora = await calculateUserIntegrityChecksum(userMoraBase);
+          users.push({ ...userMoraBase, integrityChecksum: checksumMora });
+        }
 
-    memoryUsersCache = users;
-    await setEncryptedStorageItem(USERS_STORAGE_KEY, users);
+        // 2.3 Cliente con Crédito SIN ACEPTAR (PENDIENTE)
+        const matIndex = users.findIndex(u => u.cedula === '9876543210');
+        if (matIndex === -1) {
+          const cedula2 = '9876543210';
+          const passHash2 = await hashPassword('Password123!', cedula2);
+          const matBreakdown = this.buildFixedLoanBreakdown({
+            tramiteId: 'TRM-993104',
+            principalAmount: 12000000,
+            termMonths: 12,
+            interestRatePercentage: 1.85,
+            fianzaPercentage: 6.5,
+            electronicSignatureFee: 28500,
+            electronicSignatureCode: 'OTP-621908 (SIG-MAT-99104)',
+            collectionExpenses: 0,
+            ivaPercentage: 19,
+            paymentDeadline: '2026-11-24',
+            lockedAt: '2026-10-18T14:31:40Z',
+            isLockedWhileActive: false
+          });
+          const user2Base: Omit<User, 'integrityChecksum'> = {
+            id: 'usr-mat-002',
+            cedula: cedula2,
+            fullName: 'Mateo Restrepo Cárdenas',
+            email: 'm.restrepo@seguro.com',
+            phone: '+57 301 987 6543',
+            passwordHash: passHash2,
+            role: 'CLIENT',
+            isActive: true,
+            createdAt: '2026-10-18T14:30:00Z',
+            twoFactorEnabled: true,
+            creditStatus: 'PENDIENTE',
+            availableBalance: 0,
+            creditLimit: 12000000,
+            creditEstimatedDate: '2026-10-24',
+            creditTramiteId: 'TRM-993104',
+            paymentStatus: 'SIN_ACEPTAR',
+            daysOverdue: 0,
+            loanTermMonths: 12,
+            customInstallmentAmount: matBreakdown.monthlyInstallmentAmount,
+            activeLoanBreakdown: matBreakdown,
+            acceptedPrivacyPolicy: true,
+            acceptedPrivacyDate: '2026-10-18T14:30:00Z',
+            failedLoginAttempts: 0,
+            legalSignature: {
+              signatureId: 'SIG-MAT-99104',
+              phoneVerified: '+57 301 987 6543',
+              otpCode: '621908',
+              signedAt: '2026-10-18T14:31:40Z',
+              ipAddress: '186.84.90.115',
+              userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15',
+              platform: 'iPhone / Mobile Safari',
+              screenResolution: '393x852',
+              language: 'es-ES',
+              signatureHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+              firestoreSynced: true,
+              firestoreDocId: 'firestore_vault_mat_99104',
+              acceptedPolicies: {
+                termsAndConditions: true,
+                privacyPolicy: true,
+                financialDataConsent: true,
+                otpElectronicSignatureAgreement: true,
+                version: 'v2026.1 - Políticas de Protección y Contrato Financiero',
+                acceptedAt: '2026-10-18T14:31:40Z'
+              }
+            }
+          };
+          const checksum2 = await calculateUserIntegrityChecksum(user2Base);
+          users.push({ ...user2Base, integrityChecksum: checksum2 });
+        }
+
+        // 3. Semilla de Trabajador / Operador
+        const workerExists = users.some(u => u.cedula === 'OP-2001');
+        if (!workerExists) {
+          const workerCedula = 'OP-2001';
+          const workerPass = await hashPassword('Worker123!', workerCedula);
+          const workerBase: Omit<User, 'integrityChecksum'> = {
+            id: 'usr-wrk-001',
+            cedula: workerCedula,
+            fullName: 'Carlos Andrés Méndez',
+            email: 'c.mendez@crediulep.com',
+            phone: '+57 310 555 7788',
+            passwordHash: workerPass,
+            role: 'WORKER',
+            workerPermissions: ['CREAR_USUARIOS', 'APROBAR_CREDITOS', 'RECHAZAR_CREDITOS', 'CONFIGURAR_SISTEMA'],
+            isActive: true,
+            createdAt: '2026-10-17T09:00:00Z',
+            twoFactorEnabled: true,
+            creditStatus: 'ASIGNADO',
+            availableBalance: 0,
+            creditLimit: 0,
+            creditTramiteId: 'OP-01',
+            acceptedPrivacyPolicy: true,
+            acceptedPrivacyDate: '2026-10-17T09:00:00Z',
+            failedLoginAttempts: 0
+          };
+          const checksumWorker = await calculateUserIntegrityChecksum(workerBase);
+          users.push({ ...workerBase, integrityChecksum: checksumWorker });
+        }
+
+        // Normalizar desglose de todos los clientes existentes
+        for (let i = 0; i < users.length; i++) {
+          const normalized = this.normalizeClientLoanBreakdown(users[i]);
+          const { integrityChecksum, ...base } = normalized;
+          const checksum = await calculateUserIntegrityChecksum(base);
+          users[i] = { ...base, integrityChecksum: checksum };
+        }
+
+        memoryUsersCache = users;
+        await setEncryptedStorageItem(USERS_STORAGE_KEY, users);
 
     // Inicializar Auditoría Inmutable si no existe
     const existingAudit = await getEncryptedStorageItem<AuditBlock[]>(AUDIT_STORAGE_KEY);
@@ -470,6 +796,12 @@ export class StorageService {
    */
   static async getUsers(): Promise<{ users: User[]; tamperedUsers: string[] }> {
     await this.initializeDefaultData();
+    const storedLoanSettings = await getEncryptedStorageItem<LoanGeneralSettings>(
+      LOAN_SETTINGS_STORAGE_KEY
+    );
+    if (storedLoanSettings) {
+      memoryLoanSettingsCache = { ...DEFAULT_LOAN_SETTINGS, ...storedLoanSettings };
+    }
     const decryptedUsers = await getEncryptedStorageItem<User[]>(USERS_STORAGE_KEY);
     const users: User[] = Array.isArray(decryptedUsers)
       ? decryptedUsers
@@ -481,6 +813,7 @@ export class StorageService {
       const tamperedUsers: string[] = [];
 
       for (const u of users) {
+        this.normalizeClientLoanBreakdown(u);
         const isValid = await verifyUserIntegrity(u);
         if (!isValid) {
           tamperedUsers.push(u.cedula);
@@ -603,7 +936,7 @@ export class StorageService {
   }
 
   /**
-   * Registra un cliente de forma pública o por formulario
+   * Registra un cliente de forma pública o por formulario, calculando y fijando el desglose del crédito si nace activo
    */
   static async registerUser(params: {
     cedula: string;
@@ -616,6 +949,17 @@ export class StorageService {
     role?: 'CLIENT' | 'WORKER';
     workerPermissions?: WorkerPermission[];
     legalSignature?: LegalSignatureRecord;
+    loanParams?: {
+      principalAmount?: number;
+      termMonths?: number;
+      interestAmount?: number;
+      fianzaAmount?: number;
+      electronicSignatureFee?: number;
+      electronicSignatureCode?: string;
+      collectionExpenses?: number;
+      ivaAmount?: number;
+      paymentDeadline?: string;
+    };
   }): Promise<{ success: boolean; message: string; user?: User }> {
     const { users } = await this.getUsers();
     const cleanCedula = params.cedula.trim().toUpperCase();
@@ -625,9 +969,42 @@ export class StorageService {
     }
 
     const passwordHash = await hashPassword(params.password, params.cedula.trim());
-    const availableBalance = params.creditStatus === 'ASIGNADO' ? (params.initialBalance || 15000000) : 0;
     const creditTramiteId = 'TRM-' + Math.floor(100000 + Math.random() * 900000);
     const role = params.role || 'CLIENT';
+    const settings = this.getLoanSettings();
+
+    const principalAmount =
+      params.loanParams?.principalAmount ??
+      params.initialBalance ??
+      10000000;
+    const termMonths =
+      params.loanParams?.termMonths ?? settings.defaultTermMonths ?? 12;
+
+    const breakdown =
+      role === 'CLIENT'
+        ? this.buildFixedLoanBreakdown({
+            tramiteId: creditTramiteId,
+            principalAmount,
+            termMonths,
+            interestAmount: params.loanParams?.interestAmount,
+            fianzaAmount: params.loanParams?.fianzaAmount,
+            electronicSignatureFee: params.loanParams?.electronicSignatureFee,
+            electronicSignatureCode:
+              params.loanParams?.electronicSignatureCode ||
+              (params.legalSignature?.otpCode
+                ? `OTP-${params.legalSignature.otpCode} (${params.legalSignature.signatureId})`
+                : `FIRMA-OTP-${creditTramiteId}`),
+            collectionExpenses: params.loanParams?.collectionExpenses,
+            ivaAmount: params.loanParams?.ivaAmount,
+            paymentDeadline: params.loanParams?.paymentDeadline,
+            isLockedWhileActive: params.creditStatus === 'ASIGNADO'
+          })
+        : undefined;
+
+    const availableBalance =
+      role === 'CLIENT' && params.creditStatus === 'ASIGNADO' && breakdown
+        ? breakdown.totalPaymentAmount
+        : 0;
 
     const baseUser: Omit<User, 'integrityChecksum'> = {
       id: 'usr-' + Date.now(),
@@ -643,10 +1020,28 @@ export class StorageService {
       twoFactorEnabled: true,
       creditStatus: params.creditStatus,
       availableBalance,
-      creditLimit: params.creditStatus === 'ASIGNADO' ? availableBalance * 1.5 : 10000000,
-      creditAssignedDate: params.creditStatus === 'ASIGNADO' ? new Date().toISOString().split('T')[0] : undefined,
-      creditEstimatedDate: params.creditStatus === 'PENDIENTE' ? 'En evaluación' : undefined,
+      creditLimit:
+        role === 'CLIENT' && breakdown ? breakdown.principalAmount : 0,
+      creditAssignedDate:
+        params.creditStatus === 'ASIGNADO'
+          ? new Date().toISOString().split('T')[0]
+          : undefined,
+      creditEstimatedDate:
+        params.creditStatus === 'PENDIENTE' ? 'En evaluación' : undefined,
       creditTramiteId,
+      paymentStatus:
+        role === 'CLIENT'
+          ? params.creditStatus === 'ASIGNADO'
+            ? 'AL_DIA'
+            : 'SIN_ACEPTAR'
+          : undefined,
+      daysOverdue: 0,
+      loanTermMonths: termMonths,
+      customInstallmentAmount: breakdown?.monthlyInstallmentAmount,
+      nextPaymentDate: breakdown?.paymentDeadline,
+      taxPercentageApplied: settings.taxPercentage,
+      interestRateApplied: settings.monthlyInterestRate,
+      activeLoanBreakdown: breakdown,
       acceptedPrivacyPolicy: true,
       acceptedPrivacyDate: new Date().toISOString(),
       failedLoginAttempts: 0,
@@ -670,7 +1065,11 @@ export class StorageService {
       'USER_REGISTRATION',
       newUser.id,
       newUser.cedula,
-      `Nuevo ${role} registrado: ${newUser.fullName}. Estado de crédito: ${newUser.creditStatus}.`
+      `Nuevo ${role} registrado: ${newUser.fullName}. Estado de crédito: ${newUser.creditStatus}.${
+        breakdown && params.creditStatus === 'ASIGNADO'
+          ? ` Crédito FIJADO INMUTABLE: Principal=$${breakdown.principalAmount.toLocaleString('es-CO')}, Interés=$${breakdown.interestAmount.toLocaleString('es-CO')}, Fianza=$${breakdown.fianzaAmount.toLocaleString('es-CO')}, Firma=$${breakdown.electronicSignatureFee.toLocaleString('es-CO')}, Cobranza=$${breakdown.collectionExpenses.toLocaleString('es-CO')}, IVA=$${breakdown.ivaAmount.toLocaleString('es-CO')}, Límite Pago=${breakdown.paymentDeadline}, Pago Total=$${breakdown.totalPaymentAmount.toLocaleString('es-CO')}.`
+          : ''
+      }`
     );
 
     if (params.legalSignature) {
@@ -686,6 +1085,111 @@ export class StorageService {
   }
 
   /**
+   * Crea y FIJA un crédito nuevo para un cliente existente.
+   * REGLA FINTECH INMUTABLE: Si el cliente ya tiene un crédito activo, NO se puede editar, borrar ni cambiar mientras esté activo.
+   */
+  static async createAndLockClientCredit(
+    userId: string,
+    params: {
+      principalAmount: number;
+      termMonths?: number;
+      interestRatePercentage?: number;
+      interestAmount?: number;
+      fianzaPercentage?: number;
+      fianzaAmount?: number;
+      electronicSignatureFee?: number;
+      electronicSignatureCode?: string;
+      collectionExpenses?: number;
+      ivaPercentage?: number;
+      ivaAmount?: number;
+      paymentDeadline?: string;
+    },
+    actorName: string
+  ): Promise<{ success: boolean; user?: User; message: string }> {
+    const { users } = await this.getUsers();
+    const index = users.findIndex(u => u.id === userId);
+    if (index === -1) {
+      return { success: false, message: 'Usuario no encontrado.' };
+    }
+
+    const user = users[index];
+    if (this.isCreditActiveAndLocked(user)) {
+      return {
+        success: false,
+        message:
+          'BLOQUEO FINTECH: Este cliente ya tiene un crédito ACTIVO y FIJADO. No se puede editar, borrar ni cambiar mientras esté el crédito activo.'
+      };
+    }
+
+    const loanSettings = this.getLoanSettings();
+    const newTramiteId =
+      user.creditStatus === 'PENDIENTE' && user.creditTramiteId
+        ? user.creditTramiteId
+        : 'TRM-' + Math.floor(100000 + Math.random() * 900000);
+
+    const breakdown = this.buildFixedLoanBreakdown({
+      tramiteId: newTramiteId,
+      principalAmount: params.principalAmount,
+      termMonths: params.termMonths || user.loanTermMonths || loanSettings.defaultTermMonths || 12,
+      interestRatePercentage: params.interestRatePercentage,
+      interestAmount: params.interestAmount,
+      fianzaPercentage: params.fianzaPercentage,
+      fianzaAmount: params.fianzaAmount,
+      electronicSignatureFee: params.electronicSignatureFee,
+      electronicSignatureCode:
+        params.electronicSignatureCode ||
+        (user.legalSignature?.otpCode
+          ? `OTP-${user.legalSignature.otpCode}`
+          : `FIRMA-OTP-${newTramiteId}`),
+      collectionExpenses: params.collectionExpenses,
+      ivaPercentage: params.ivaPercentage,
+      ivaAmount: params.ivaAmount,
+      paymentDeadline: params.paymentDeadline,
+      isLockedWhileActive: true
+    });
+
+    const updatedUser: User = {
+      ...user,
+      creditStatus: 'ASIGNADO',
+      paymentStatus: 'AL_DIA',
+      creditTramiteId: newTramiteId,
+      creditLimit: breakdown.principalAmount,
+      availableBalance: breakdown.totalPaymentAmount,
+      daysOverdue: 0,
+      loanTermMonths: breakdown.termMonths,
+      customInstallmentAmount: breakdown.monthlyInstallmentAmount,
+      taxPercentageApplied: breakdown.ivaPercentage,
+      interestRateApplied: breakdown.interestRatePercentage,
+      creditAssignedDate: new Date().toISOString().split('T')[0],
+      nextPaymentDate: breakdown.paymentDeadline,
+      activeLoanBreakdown: breakdown,
+      integrityChecksum: ''
+    };
+
+    const saved = await this.updateUserDirectly(updatedUser);
+
+    notificationService.sendPush({
+      title: '🎉 ¡Nuevo Crédito Fijado y Desembolsado!',
+      message: `Estimado/a ${user.fullName}, su crédito ${newTramiteId} por monto principal de $ ${breakdown.principalAmount.toLocaleString('es-CO')} COP (Pago total: $ ${breakdown.totalPaymentAmount.toLocaleString('es-CO')} COP) ha sido activado y fijado.`,
+      type: 'credit_assigned'
+    });
+
+    await this.addAuditEntry(
+      'NEW_CREDIT_CREATED_AND_LOCKED',
+      user.id,
+      user.cedula,
+      `Nuevo crédito creado y FIJADO por ${actorName} (${newTramiteId}): Monto Principal Desembolsado=$${breakdown.principalAmount.toLocaleString('es-CO')}, Interés Empresa=$${breakdown.interestAmount.toLocaleString('es-CO')}, Fianza=$${breakdown.fianzaAmount.toLocaleString('es-CO')}, Firma Electrónica=$${breakdown.electronicSignatureFee.toLocaleString('es-CO')} (${breakdown.electronicSignatureCode}), Gastos Cobranza=$${breakdown.collectionExpenses.toLocaleString('es-CO')}, IVA=$${breakdown.ivaAmount.toLocaleString('es-CO')}, Fecha Límite=${breakdown.paymentDeadline}, Pago Total=$${breakdown.totalPaymentAmount.toLocaleString('es-CO')}. Bloqueado contra edición mientras esté activo.`
+    );
+
+    return {
+      success: true,
+      user: saved,
+      message:
+        'Crédito nuevo creado y FIJADO correctamente. No podrá ser editado, borrado ni cambiado mientras esté activo.'
+    };
+  }
+
+  /**
    * Aprobación de crédito por Administrador o Trabajador autorizado
    */
   static async approveUserCredit(userId: string, newBalance: number, adminName: string): Promise<{ success: boolean; user?: User; message: string }> {
@@ -696,65 +1200,35 @@ export class StorageService {
     }
 
     const user = users[index];
-    const loanSettings = this.getLoanSettings();
-    const termMonths = user.loanTermMonths || loanSettings.defaultTermMonths || 12;
-
-    // Si el usuario ya tenía un préstamo asignado anterior, archivarlo en previousLoans
-    const updatedPreviousLoans: PreviousLoanRecord[] = [...(user.previousLoans || [])];
-    if (user.creditStatus === 'ASIGNADO' && user.creditLimit > 0) {
-      updatedPreviousLoans.unshift({
-        id: 'prev-' + Date.now(),
-        tramiteId: user.creditTramiteId,
-        amountGranted: user.creditLimit,
-        totalPaid: user.creditLimit,
-        termMonths: user.loanTermMonths || 12,
-        taxPercentageApplied: user.taxPercentageApplied ?? loanSettings.taxPercentage,
-        interestRateApplied: user.interestRateApplied ?? loanSettings.monthlyInterestRate,
-        startDate: user.creditAssignedDate || new Date().toISOString().split('T')[0],
-        closedDate: new Date().toISOString().split('T')[0],
-        finalStatus: 'REFINANCIADO',
-        paymentBehavior: user.daysOverdue && user.daysOverdue > 0 ? 'CON_MORA_SUPERADA' : 'PUNTUAL'
-      });
+    if (this.isCreditActiveAndLocked(user)) {
+      return {
+        success: false,
+        message:
+          'BLOQUEO FINTECH: El crédito del cliente ya está ACTIVO y FIJADO. No se puede editar, borrar ni cambiar mientras esté activo.'
+      };
     }
 
-    const updatedUser: User = {
-      ...user,
-      creditStatus: 'ASIGNADO',
-      availableBalance: newBalance,
-      creditLimit: newBalance,
-      paymentStatus: 'AL_DIA',
-      daysOverdue: 0,
-      loanTermMonths: termMonths,
-      customInstallmentAmount: Math.round(newBalance / termMonths),
-      taxPercentageApplied: loanSettings.taxPercentage,
-      interestRateApplied: loanSettings.monthlyInterestRate,
-      previousLoans: updatedPreviousLoans,
-      creditAssignedDate: new Date().toISOString().split('T')[0],
-      nextPaymentDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-      integrityChecksum: ''
-    };
+    const principal =
+      newBalance > 0
+        ? newBalance
+        : user.activeLoanBreakdown?.principalAmount || user.creditLimit || 10000000;
 
-    const saved = await this.updateUserDirectly(updatedUser);
-
-    // Enviar notificación Push en tiempo real al cliente
-    notificationService.sendPush({
-      title: '🎉 ¡Préstamo Otorgado en CrediULEP!',
-      message: `Estimado/a ${user.fullName}, su préstamo ${user.creditTramiteId} ha sido otorgado por valor de $ ${newBalance.toLocaleString('es-CO')} COP.`,
-      type: 'credit_assigned'
-    });
-
-    await this.addAuditEntry(
-      'CREDIT_APPROVED_BY_ADMIN',
-      user.id,
-      user.cedula,
-      `Préstamo otorgado por ${adminName}. Monto prestado: $ ${newBalance.toLocaleString('es-CO')} COP.`
+    return await this.createAndLockClientCredit(
+      userId,
+      {
+        principalAmount: principal,
+        termMonths: user.loanTermMonths || 12,
+        paymentDeadline:
+          user.nextPaymentDate ||
+          new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+      },
+      adminName
     );
-
-    return { success: true, user: saved, message: 'Préstamo aprobado y notificado al cliente.' };
   }
 
   /**
-   * Edición completa de todos los datos del usuario y del préstamo (Panel Admin y Panel Trabajadores)
+   * Edición de datos del usuario (Panel Admin y Panel Trabajadores).
+   * REGLA FINTECH: Si el cliente tiene un crédito ACTIVO, éste se encuentra FIJADO y NO se puede editar, borrar ni cambiar ningún dato del crédito mientras esté activo.
    */
   static async updateUserCompleteData(
     userId: string,
@@ -797,37 +1271,143 @@ export class StorageService {
     }
 
     const current = users[index];
+    const isLockedActiveCredit = this.isCreditActiveAndLocked(current);
+
+    if (isLockedActiveCredit) {
+      const creditFieldChanged =
+        updates.creditStatus !== current.creditStatus ||
+        (updates.creditTramiteId &&
+          updates.creditTramiteId.trim() !== current.creditTramiteId) ||
+        Number(updates.creditLimit) !== Number(current.creditLimit) ||
+        Number(updates.availableBalance) !== Number(current.availableBalance) ||
+        (updates.customInstallmentAmount !== undefined &&
+          Number(updates.customInstallmentAmount) !==
+            Number(current.customInstallmentAmount)) ||
+        (updates.loanTermMonths !== undefined &&
+          Number(updates.loanTermMonths) !== Number(current.loanTermMonths || 12)) ||
+        (updates.nextPaymentDate !== undefined &&
+          updates.nextPaymentDate !== current.nextPaymentDate) ||
+        (updates.taxPercentageApplied !== undefined &&
+          Number(updates.taxPercentageApplied) !==
+            Number(current.taxPercentageApplied)) ||
+        (updates.interestRateApplied !== undefined &&
+          Number(updates.interestRateApplied) !==
+            Number(current.interestRateApplied)) ||
+        (updates.paymentStatus !== undefined &&
+          updates.paymentStatus !== current.paymentStatus) ||
+        (updates.daysOverdue !== undefined &&
+          Number(updates.daysOverdue) !== Number(current.daysOverdue || 0));
+
+      if (creditFieldChanged) {
+        await this.addAuditEntry(
+          'BLOCKED_ACTIVE_LOAN_EDIT_ATTEMPT',
+          current.id,
+          current.cedula,
+          `Intento bloqueado de modificar el crédito activo (${current.creditTramiteId}) por ${editorName}. El crédito se encuentra FIJADO mientras esté activo.`
+        );
+        return {
+          success: false,
+          message:
+            'CRÉDITO FIJADO: No se puede editar, borrar ni cambiar la información del crédito mientras el crédito esté activo.'
+        };
+      }
+    }
+
     let passwordHash = current.passwordHash;
     if (updates.newPassword && updates.newPassword.trim().length > 0) {
       passwordHash = await hashPassword(updates.newPassword.trim(), cleanNewCedula);
     } else if (cleanNewCedula !== current.cedula.trim()) {
-      // Si cambió la cédula sin ingresar nueva clave, mantenemos la clave por defecto o requerimos clave si se desea;
-      // actualizamos el hash con Password123! para cuentas de prueba si no especificaron nueva clave
       passwordHash = await hashPassword('Password123!', cleanNewCedula);
     }
 
+    // Si el crédito NO estaba activo y pasa a ASIGNADO con monto, generamos y fijamos su desglose
+    const becomingActive =
+      !isLockedActiveCredit &&
+      (!current.role || current.role === 'CLIENT') &&
+      updates.creditStatus === 'ASIGNADO' &&
+      Number(updates.creditLimit) > 0;
+
+    const newTramite = updates.creditTramiteId.trim() || current.creditTramiteId;
+    const newBreakdown = isLockedActiveCredit
+      ? current.activeLoanBreakdown
+      : becomingActive
+      ? this.buildFixedLoanBreakdown({
+          tramiteId: newTramite,
+          principalAmount: Number(updates.creditLimit) || 10000000,
+          termMonths: Number(updates.loanTermMonths) || 12,
+          interestRatePercentage:
+            updates.interestRateApplied !== undefined
+              ? Number(updates.interestRateApplied)
+              : current.interestRateApplied,
+          ivaPercentage:
+            updates.taxPercentageApplied !== undefined
+              ? Number(updates.taxPercentageApplied)
+              : current.taxPercentageApplied,
+          paymentDeadline: updates.nextPaymentDate || current.nextPaymentDate,
+          isLockedWhileActive: true
+        })
+      : current.activeLoanBreakdown;
+
     const updatedUser: User = {
       ...current,
-      cedula: cleanNewCedula,
+      cedula: isLockedActiveCredit ? current.cedula : cleanNewCedula,
       fullName: updates.fullName.trim(),
       email: updates.email.trim().toLowerCase(),
       phone: updates.phone.trim(),
       passwordHash,
       isActive: updates.isActive !== undefined ? updates.isActive : current.isActive,
-      creditStatus: updates.creditStatus,
-      creditTramiteId: updates.creditTramiteId.trim() || current.creditTramiteId,
-      creditLimit: Number(updates.creditLimit) || 0,
-      availableBalance: updates.creditStatus === 'ASIGNADO' ? Number(updates.availableBalance) || 0 : 0,
-      customInstallmentAmount: updates.customInstallmentAmount !== undefined ? Number(updates.customInstallmentAmount) : current.customInstallmentAmount,
-      loanTermMonths: Number(updates.loanTermMonths) || 12,
-      paymentStatus: updates.paymentStatus || (updates.creditStatus === 'ASIGNADO' ? 'AL_DIA' : 'SIN_ACEPTAR'),
-      daysOverdue: Number(updates.daysOverdue) || 0,
-      creditAssignedDate: updates.creditAssignedDate || current.creditAssignedDate,
-      nextPaymentDate: updates.nextPaymentDate || current.nextPaymentDate,
-      taxPercentageApplied: updates.taxPercentageApplied !== undefined ? Number(updates.taxPercentageApplied) : current.taxPercentageApplied,
-      interestRateApplied: updates.interestRateApplied !== undefined ? Number(updates.interestRateApplied) : current.interestRateApplied,
-      previousLoans: updates.previousLoans !== undefined ? updates.previousLoans : current.previousLoans,
-      workerPermissions: updates.workerPermissions !== undefined ? updates.workerPermissions : current.workerPermissions,
+      creditStatus: isLockedActiveCredit ? current.creditStatus : updates.creditStatus,
+      creditTramiteId: isLockedActiveCredit ? current.creditTramiteId : newTramite,
+      creditLimit: isLockedActiveCredit
+        ? current.creditLimit
+        : newBreakdown?.principalAmount ?? (Number(updates.creditLimit) || 0),
+      availableBalance: isLockedActiveCredit
+        ? current.availableBalance
+        : updates.creditStatus === 'ASIGNADO'
+        ? Number(updates.availableBalance) > 0
+          ? Number(updates.availableBalance)
+          : newBreakdown?.totalPaymentAmount ?? 0
+        : 0,
+      customInstallmentAmount: isLockedActiveCredit
+        ? current.customInstallmentAmount
+        : updates.customInstallmentAmount !== undefined
+        ? Number(updates.customInstallmentAmount)
+        : newBreakdown?.monthlyInstallmentAmount ?? current.customInstallmentAmount,
+      loanTermMonths: isLockedActiveCredit
+        ? current.loanTermMonths
+        : Number(updates.loanTermMonths) || 12,
+      paymentStatus: isLockedActiveCredit
+        ? current.paymentStatus
+        : updates.paymentStatus ||
+          (updates.creditStatus === 'ASIGNADO' ? 'AL_DIA' : 'SIN_ACEPTAR'),
+      daysOverdue: isLockedActiveCredit
+        ? current.daysOverdue
+        : Number(updates.daysOverdue) || 0,
+      creditAssignedDate: isLockedActiveCredit
+        ? current.creditAssignedDate
+        : updates.creditAssignedDate || current.creditAssignedDate,
+      nextPaymentDate: isLockedActiveCredit
+        ? current.nextPaymentDate
+        : updates.nextPaymentDate || newBreakdown?.paymentDeadline || current.nextPaymentDate,
+      taxPercentageApplied: isLockedActiveCredit
+        ? current.taxPercentageApplied
+        : updates.taxPercentageApplied !== undefined
+        ? Number(updates.taxPercentageApplied)
+        : current.taxPercentageApplied,
+      interestRateApplied: isLockedActiveCredit
+        ? current.interestRateApplied
+        : updates.interestRateApplied !== undefined
+        ? Number(updates.interestRateApplied)
+        : current.interestRateApplied,
+      activeLoanBreakdown: newBreakdown,
+      previousLoans:
+        updates.previousLoans !== undefined
+          ? updates.previousLoans
+          : current.previousLoans,
+      workerPermissions:
+        updates.workerPermissions !== undefined
+          ? updates.workerPermissions
+          : current.workerPermissions,
       integrityChecksum: ''
     };
 
@@ -837,18 +1417,18 @@ export class StorageService {
       'USER_AND_LOAN_DATA_EDITED',
       saved.id,
       saved.cedula,
-      `Datos integrales y de préstamo actualizados por ${editorName}: Titular=${saved.fullName}, Estado=${saved.creditStatus}, Cartera=${saved.paymentStatus}, Prestado=$${saved.creditLimit.toLocaleString('es-CO')}, Deuda=$${saved.availableBalance.toLocaleString('es-CO')}.`
+      `Datos actualizados por ${editorName}: Titular=${saved.fullName}, Estado=${saved.creditStatus}, Cartera=${saved.paymentStatus}, Principal=$${saved.creditLimit.toLocaleString('es-CO')}, Saldo Pago Total=$${saved.availableBalance.toLocaleString('es-CO')}.`
     );
 
     return {
       success: true,
       user: saved,
-      message: 'Todos los datos del usuario y del préstamo han sido actualizados correctamente.'
+      message: 'Datos actualizados correctamente.'
     };
   }
 
   /**
-   * Procesa el pago de cuota o cuota personalizada del préstamo
+   * Procesa el pago de cuota o cuota personalizada del préstamo sobre el Pago Total
    */
   static async payLoan(
     userId: string,
@@ -886,7 +1466,7 @@ export class StorageService {
 
     const generatedPaymentNumber =
       paymentDetails?.paymentNumber ||
-      `PAG-EFI-${Math.floor(100000 + Math.random() * 900000)}`;
+      `PAG-${Math.floor(100000 + Math.random() * 900000)}`;
     const nowIso = new Date().toISOString();
 
     const newPaymentRecord: ClientPaymentRecord = {
@@ -903,29 +1483,49 @@ export class StorageService {
     };
 
     const loanSettings = this.getLoanSettings();
+    const breakdown = user.activeLoanBreakdown;
     const updatedPreviousLoans: PreviousLoanRecord[] = [...(user.previousLoans || [])];
-    // Si el saldo llega a 0, se registra automáticamente en el historial de créditos anteriores
+    // Si el saldo llega a 0, el crédito activo finaliza y se archiva con su desglose completo en previousLoans
     if (newBalance === 0 && !updatedPreviousLoans.some(p => p.tramiteId === user.creditTramiteId)) {
+      const principalAmt = breakdown?.principalAmount || user.creditLimit || appliedAmount;
+      const totalPaidAmt = breakdown?.totalPaymentAmount || user.creditLimit || appliedAmount;
       updatedPreviousLoans.unshift({
         id: 'prev-' + Date.now(),
         tramiteId: user.creditTramiteId,
-        amountGranted: user.creditLimit || appliedAmount,
-        totalPaid: user.creditLimit || appliedAmount,
-        termMonths: user.loanTermMonths || 12,
-        taxPercentageApplied: user.taxPercentageApplied ?? loanSettings.taxPercentage,
-        interestRateApplied: user.interestRateApplied ?? loanSettings.monthlyInterestRate,
+        amountGranted: principalAmt,
+        totalPaid: totalPaidAmt,
+        termMonths: breakdown?.termMonths || user.loanTermMonths || 12,
+        taxPercentageApplied: breakdown?.ivaPercentage ?? user.taxPercentageApplied ?? loanSettings.taxPercentage,
+        interestRateApplied: breakdown?.interestRatePercentage ?? user.interestRateApplied ?? loanSettings.monthlyInterestRate,
         startDate: user.creditAssignedDate || new Date().toISOString().split('T')[0],
         closedDate: new Date().toISOString().split('T')[0],
         finalStatus: 'PAZ_Y_SALVO',
-        paymentBehavior: user.daysOverdue && user.daysOverdue > 0 ? 'CON_MORA_SUPERADA' : 'EXCELENTE'
+        paymentBehavior: user.daysOverdue && user.daysOverdue > 0 ? 'CON_MORA_SUPERADA' : 'EXCELENTE',
+        principalAmount: principalAmt,
+        interestAmount: breakdown?.interestAmount ?? 0,
+        fianzaAmount: breakdown?.fianzaAmount ?? 0,
+        electronicSignatureFee: breakdown?.electronicSignatureFee ?? 28500,
+        electronicSignatureCode: breakdown?.electronicSignatureCode ?? `FIRMA-OTP-${user.creditTramiteId}`,
+        collectionExpenses: breakdown?.collectionExpenses ?? 0,
+        ivaAmount: breakdown?.ivaAmount ?? 0,
+        paymentDeadline: breakdown?.paymentDeadline || user.nextPaymentDate || new Date().toISOString().split('T')[0],
+        totalPaymentAmount: totalPaidAmt
       });
     }
+
+    const updatedBreakdown = breakdown
+      ? {
+          ...breakdown,
+          isLockedWhileActive: newBalance > 0
+        }
+      : undefined;
 
     const updatedUser: User = {
       ...user,
       availableBalance: newBalance,
       paymentStatus: newBalance === 0 ? 'PAZ_Y_SALVO' : 'AL_DIA',
       daysOverdue: 0,
+      activeLoanBreakdown: updatedBreakdown,
       previousLoans: updatedPreviousLoans,
       lastPaymentNumber: generatedPaymentNumber,
       lastPaymentStatus: 'PAGO_PROCESADO',
@@ -939,8 +1539,8 @@ export class StorageService {
     const saved = await this.updateUserDirectly(updatedUser);
 
     notificationService.sendPush({
-      title: `✅ PAGO PROCESADO (${generatedPaymentNumber})`,
-      message: `Se registró tu pago N° ${generatedPaymentNumber} por $ ${appliedAmount.toLocaleString('es-CO')} COP vía ${paymentMethod}. Saldo pendiente: $ ${newBalance.toLocaleString('es-CO')} COP.`,
+      title: `✅ CUOTA PAGADA (${generatedPaymentNumber})`,
+      message: `Tu cuota fue marcada como Pagada (N° ${generatedPaymentNumber}) por $ ${appliedAmount.toLocaleString('es-CO')} COP. Saldo pendiente: $ ${newBalance.toLocaleString('es-CO')} COP.`,
       type: 'credit_assigned'
     });
 
@@ -948,19 +1548,19 @@ export class StorageService {
       paymentType === 'CUOTA_PERSONALIZADA' ? 'LOAN_CUSTOM_PAYMENT' : 'LOAN_INSTALLMENT_PAYMENT',
       user.id,
       user.cedula,
-      `PAGO PROCESADO • N° Pago: ${generatedPaymentNumber} • ${labelTipo} vía ${paymentMethod} por valor de $ ${appliedAmount.toLocaleString('es-CO')} COP. Pagador identificado: ${newPaymentRecord.payerFullName} (CC ${newPaymentRecord.payerCedula} | ${newPaymentRecord.payerEmail}). Saldo restante: $ ${newBalance.toLocaleString('es-CO')} COP.`
+      `CUOTA PAGADA (WEBHOOK VERIFICADO) • N° Pago: ${generatedPaymentNumber} • ${labelTipo} vía ${paymentMethod} por valor de $ ${appliedAmount.toLocaleString('es-CO')} COP. Pagador identificado: ${newPaymentRecord.payerFullName} (CC ${newPaymentRecord.payerCedula} | ${newPaymentRecord.payerEmail}). Saldo restante: $ ${newBalance.toLocaleString('es-CO')} COP.`
     );
 
     return {
       success: true,
       user: saved,
       paymentNumber: generatedPaymentNumber,
-      message: `PAGO PROCESADO • N° de Pago: ${generatedPaymentNumber}`
+      message: `CUOTA PAGADA • N° de Pago: ${generatedPaymentNumber}`
     };
   }
 
   /**
-   * Registra un intento de pago cancelado o no completado en la pasarela Efipay
+   * Registra un intento de pago cancelado o no completado en la pasarela de pagos
    */
   static async recordCancelledPayment(
     userId: string,
@@ -982,7 +1582,7 @@ export class StorageService {
     const user = users[index];
     const cancelledNumber =
       payerInfo?.paymentNumber ||
-      `CANC-EFI-${Math.floor(100000 + Math.random() * 900000)}`;
+      `CANC-${Math.floor(100000 + Math.random() * 900000)}`;
     const nowIso = new Date().toISOString();
 
     const cancelledRecord: ClientPaymentRecord = {
@@ -1028,7 +1628,7 @@ export class StorageService {
 
   /**
    * Solicitud de nuevo crédito tras finalizar el anterior:
-   * Registra firma electrónica por OTP, aceptación de condiciones y deja el crédito EN PROCESO DE DESEMBOLSO
+   * Registra firma electrónica por OTP, aceptación de condiciones y FIJA el desglose del nuevo crédito
    */
   static async requestNewLoanWithOtpSignature(
     userId: string,
@@ -1055,6 +1655,14 @@ export class StorageService {
     }
 
     const user = users[index];
+    if (this.isCreditActiveAndLocked(user)) {
+      return {
+        success: false,
+        message:
+          'Ya cuentas con un crédito ACTIVO y FIJADO. No es posible crear o modificar otro crédito mientras el actual esté activo.'
+      };
+    }
+
     const newTramiteId = `TRM-${Math.floor(100000 + Math.random() * 900000)}`;
     const bankApiReference = `ACH-${params.bankEntity
       .slice(0, 4)
@@ -1066,24 +1674,35 @@ export class StorageService {
       user.cedula
     );
 
+    const newBreakdown = this.buildFixedLoanBreakdown({
+      tramiteId: newTramiteId,
+      principalAmount: params.requestedAmount,
+      termMonths: params.requestedTermMonths,
+      electronicSignatureCode: `OTP-${params.otpCodeSigned} (${sigHash.slice(0, 10).toUpperCase()})`,
+      paymentDeadline: params.nextPaymentDate || user.nextPaymentDate,
+      lockedAt: signedAt,
+      isLockedWhileActive: true
+    });
+
     const updatedUser: User = {
       ...user,
       email: params.updatedEmail ? params.updatedEmail.trim() : user.email,
       phone: params.updatedPhone ? params.updatedPhone.trim() : user.phone,
-      nextPaymentDate: params.nextPaymentDate || user.nextPaymentDate,
+      nextPaymentDate: newBreakdown.paymentDeadline,
       creditStatus: 'ASIGNADO',
       paymentStatus: 'EN_DESEMBOLSO',
       creditTramiteId: newTramiteId,
-      creditLimit: params.requestedAmount,
+      creditLimit: newBreakdown.principalAmount,
       availableBalance: 0,
-      loanTermMonths: params.requestedTermMonths,
-      customInstallmentAmount: params.estimatedMonthlyInstallment,
+      loanTermMonths: newBreakdown.termMonths,
+      customInstallmentAmount: newBreakdown.monthlyInstallmentAmount,
       daysOverdue: 0,
+      activeLoanBreakdown: newBreakdown,
       disbursementRequest: {
         tramiteId: newTramiteId,
-        requestedAmount: params.requestedAmount,
-        requestedTermMonths: params.requestedTermMonths,
-        estimatedMonthlyInstallment: params.estimatedMonthlyInstallment,
+        requestedAmount: newBreakdown.principalAmount,
+        requestedTermMonths: newBreakdown.termMonths,
+        estimatedMonthlyInstallment: newBreakdown.monthlyInstallmentAmount,
         bankEntity: params.bankEntity,
         accountType: params.accountType,
         accountNumber: params.accountNumber,
@@ -1094,7 +1713,8 @@ export class StorageService {
         acceptedPromissoryNote: params.acceptedPromissoryNote,
         acceptedBankMandate: params.acceptedBankMandate,
         bankApiReference,
-        status: 'EN_PROCESO_DESEMBOLSO'
+        status: 'EN_PROCESO_DESEMBOLSO',
+        loanBreakdown: newBreakdown
       },
       integrityChecksum: ''
     };
@@ -1103,7 +1723,7 @@ export class StorageService {
 
     notificationService.sendPush({
       title: 'Firma Electrónica OTP Verificada • En Desembolso',
-      message: `Tu nuevo crédito por $ ${params.requestedAmount.toLocaleString('es-CO')} COP fue firmado con OTP (${params.otpCodeSigned}) y está en proceso de desembolso hacia ${params.bankEntity} (${bankApiReference}).`,
+      message: `Tu nuevo crédito por monto principal de $ ${newBreakdown.principalAmount.toLocaleString('es-CO')} COP (Pago total: $ ${newBreakdown.totalPaymentAmount.toLocaleString('es-CO')} COP) fue firmado con OTP (${params.otpCodeSigned}) y fijado.`,
       type: 'credit_pending'
     });
 
@@ -1111,18 +1731,19 @@ export class StorageService {
       'NEW_LOAN_SIGNED_OTP_DISBURSEMENT_PENDING',
       user.id,
       user.cedula,
-      `Nuevo crédito firmado con OTP (${params.otpCodeSigned}) por $${params.requestedAmount.toLocaleString('es-CO')} COP a ${params.requestedTermMonths} meses. Contacto verificado: ${updatedUser.email} / ${updatedUser.phone}. Entidad: ${params.bankEntity} (${params.accountType} ${params.accountNumber}). Ref Bancaria: ${bankApiReference}. Estado: EN PROCESO DE DESEMBOLSO.`
+      `Nuevo crédito firmado con OTP (${params.otpCodeSigned}) y FIJADO: Principal=$${newBreakdown.principalAmount.toLocaleString('es-CO')}, Interés=$${newBreakdown.interestAmount.toLocaleString('es-CO')}, Fianza=$${newBreakdown.fianzaAmount.toLocaleString('es-CO')}, Firma=$${newBreakdown.electronicSignatureFee.toLocaleString('es-CO')}, Cobranza=$${newBreakdown.collectionExpenses.toLocaleString('es-CO')}, IVA=$${newBreakdown.ivaAmount.toLocaleString('es-CO')}, Pago Total=$${newBreakdown.totalPaymentAmount.toLocaleString('es-CO')}. Estado: EN PROCESO DE DESEMBOLSO.`
     );
 
     return {
       success: true,
       user: saved,
-      message: 'Firma electrónica OTP validada. Tu crédito está en proceso de desembolso.'
+      message: 'Firma electrónica OTP validada y condiciones fijadas. Tu crédito está en proceso de desembolso.'
     };
   }
 
   /**
    * Activa y confirma el desembolso de un crédito (ya sea vía API de la Entidad Bancaria o por aceptación del Personal)
+   * Al activarse el desembolso, el crédito queda FIJADO e INMUTABLE mientras esté activo.
    */
   static async confirmLoanDisbursement(
     userId: string,
@@ -1136,36 +1757,62 @@ export class StorageService {
 
     const user = users[index];
     const req = user.disbursementRequest;
-    const disbursedAmount = req?.requestedAmount || user.creditLimit || 10000000;
-    const termMonths = req?.requestedTermMonths || user.loanTermMonths || 12;
-    const installment =
-      req?.estimatedMonthlyInstallment ||
-      user.customInstallmentAmount ||
-      Math.round(disbursedAmount / termMonths);
+    const disbursedPrincipal =
+      req?.loanBreakdown?.principalAmount ||
+      req?.requestedAmount ||
+      user.activeLoanBreakdown?.principalAmount ||
+      user.creditLimit ||
+      10000000;
+    const termMonths =
+      req?.loanBreakdown?.termMonths ||
+      req?.requestedTermMonths ||
+      user.loanTermMonths ||
+      12;
     const todayDate = new Date().toISOString().split('T')[0];
 
     const nextDateObj = new Date();
     nextDateObj.setMonth(nextDateObj.getMonth() + 1);
     const nextPaymentDate =
-      user.nextPaymentDate || nextDateObj.toISOString().split('T')[0];
+      req?.loanBreakdown?.paymentDeadline ||
+      user.nextPaymentDate ||
+      nextDateObj.toISOString().split('T')[0];
+
+    const lockedBreakdown: LoanFinancialBreakdown =
+      req?.loanBreakdown ||
+      user.activeLoanBreakdown ||
+      this.buildFixedLoanBreakdown({
+        tramiteId: req?.tramiteId || user.creditTramiteId,
+        principalAmount: disbursedPrincipal,
+        termMonths,
+        electronicSignatureCode: req?.otpCodeSigned
+          ? `OTP-${req.otpCodeSigned}`
+          : undefined,
+        paymentDeadline: nextPaymentDate,
+        isLockedWhileActive: true
+      });
+
+    lockedBreakdown.isLockedWhileActive = true;
+    lockedBreakdown.lockedAt = new Date().toISOString();
 
     const updatedUser: User = {
       ...user,
       creditStatus: 'ASIGNADO',
       paymentStatus: 'AL_DIA',
-      creditLimit: disbursedAmount,
-      availableBalance: disbursedAmount,
-      loanTermMonths: termMonths,
-      customInstallmentAmount: installment,
+      creditLimit: lockedBreakdown.principalAmount,
+      availableBalance: lockedBreakdown.totalPaymentAmount,
+      loanTermMonths: lockedBreakdown.termMonths,
+      customInstallmentAmount: lockedBreakdown.monthlyInstallmentAmount,
       creditAssignedDate: todayDate,
-      nextPaymentDate,
+      nextPaymentDate: lockedBreakdown.paymentDeadline,
       daysOverdue: 0,
+      activeLoanBreakdown: lockedBreakdown,
       disbursementRequest: req
         ? {
             ...req,
             status: 'DESEMBOLSADO',
             confirmedBy: confirmedBySource,
-            confirmedAt: new Date().toISOString()
+            confirmedAt: new Date().toISOString(),
+            loanBreakdown: lockedBreakdown
           }
         : undefined,
       integrityChecksum: ''
@@ -1174,8 +1821,8 @@ export class StorageService {
     const saved = await this.updateUserDirectly(updatedUser);
 
     notificationService.sendPush({
-      title: '¡Desembolso Exitoso y Crédito Activo!',
-      message: `Tu crédito por $ ${disbursedAmount.toLocaleString('es-CO')} COP ha sido desembolsado y activado (${confirmedBySource}).`,
+      title: '¡Desembolso Exitoso y Crédito Activo Fijado!',
+      message: `Tu crédito por monto principal de $ ${lockedBreakdown.principalAmount.toLocaleString('es-CO')} COP (Pago total: $ ${lockedBreakdown.totalPaymentAmount.toLocaleString('es-CO')} COP) ha sido desembolsado y fijado (${confirmedBySource}).`,
       type: 'credit_assigned'
     });
 
@@ -1183,18 +1830,18 @@ export class StorageService {
       'LOAN_DISBURSEMENT_ACTIVATED',
       user.id,
       user.cedula,
-      `Desembolso confirmado y activado por [${confirmedBySource}] por valor de $${disbursedAmount.toLocaleString('es-CO')} COP. Ref: ${req?.bankApiReference || user.creditTramiteId}.`
+      `Desembolso confirmado y FIJADO por [${confirmedBySource}]: Principal=$${lockedBreakdown.principalAmount.toLocaleString('es-CO')}, Pago Total=$${lockedBreakdown.totalPaymentAmount.toLocaleString('es-CO')}. Ref: ${req?.bankApiReference || user.creditTramiteId}.`
     );
 
     return {
       success: true,
       user: saved,
-      message: `Desembolso confirmado (${confirmedBySource}). El crédito ya está activo.`
+      message: `Desembolso confirmado (${confirmedBySource}). El crédito ya está activo y fijado.`
     };
   }
 
   /**
-   * Rechazo de crédito por Administrador
+   * Rechazo de crédito por Administrador (solo permitido si el crédito NO está activo)
    */
   static async rejectUserCredit(userId: string, reason: string, adminName: string): Promise<{ success: boolean; user?: User; message: string }> {
     const { users } = await this.getUsers();
@@ -1204,6 +1851,14 @@ export class StorageService {
     }
 
     const user = users[index];
+    if (this.isCreditActiveAndLocked(user)) {
+      return {
+        success: false,
+        message:
+          'BLOQUEO FINTECH: No se puede rechazar, borrar ni cambiar un crédito que ya se encuentra ACTIVO y FIJADO.'
+      };
+    }
+
     const updatedUser: User = {
       ...user,
       creditStatus: 'RECHAZADO',

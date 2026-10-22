@@ -48,15 +48,15 @@ export const HelpPanelModal: React.FC<HelpPanelModalProps> = ({
   const faqs = [
     {
       q: '¿Cómo realizo el pago de mi cuota o un pago parcial?',
-      a: 'En tu panel principal encontrarás dos opciones: "Pagar Cuota" para abonar el valor regular de tu cuota mensual, o "Pago Parcial" donde puedes ingresar el monto personalizado que desees abonar a tu deuda. Ambos métodos te conectan con la pasarela oficial Efipay encriptada de extremo a extremo.'
+      a: 'En tu panel principal encontrarás las opciones para abonar el valor de tu cuota mensual, el saldo restante u otro monto personalizado. Todos los métodos se procesan en línea con cifrado de extremo a extremo.'
     },
     {
-      q: '¿Qué medios de pago acepta la pasarela Efipay?',
-      a: 'Efipay admite PSE (todos los bancos de Colombia), Tarjetas Débito y Crédito (Visa, Mastercard, American Express), Billeteras digitales (Nequi, Daviplata, Bancolombia a la mano) y Código QR EMVCo interoperable para liquidación instantánea.'
+      q: '¿Qué medios de pago acepta la plataforma?',
+      a: 'La plataforma admite PSE (todos los bancos de Colombia), Tarjetas Débito y Crédito (Visa, Mastercard, American Express), Billeteras digitales (Nequi, Daviplata, Bancolombia a la mano) y Código QR EMVCo interoperable para liquidación instantánea.'
     },
     {
       q: '¿Cómo descargo mi comprobante de pago?',
-      a: 'Una vez procesado el pago en la pasarela Efipay, aparecerá automáticamente en pantalla el botón "Descargar Comprobante Oficial (PDF)". También quedará registrado de forma permanente con su número de referencia en tu historial y en el panel administrativo.'
+      a: 'Una vez procesado el pago y confirmada la cuota como pagada, aparecerá automáticamente en pantalla el botón para descargar tu ticket en PDF. También quedará registrado de forma permanente con su número de referencia en tu historial.'
     },
     {
       q: '¿Cuánto tiempo tarda en aprobarse mi crédito si está en evaluación?',
@@ -116,7 +116,7 @@ export const HelpPanelModal: React.FC<HelpPanelModalProps> = ({
                 ¡Hola, {firstName}!
               </p>
               <p className="text-purple-700 text-xs mt-0.5">
-                ¿Tienes dudas con tu crédito, cuotas o la pasarela de pago Efipay? Consulta las guías a continuación o comunícate con un asesor.
+                ¿Tienes dudas con tu crédito, cuotas o pagos en línea? Consulta las guías a continuación o comunícate con un asesor.
               </p>
             </div>
           </div>
